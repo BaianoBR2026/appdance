@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AppDance - Telão</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@800&display=swap">
 <style>
 :root{--pink:#ff2d7a;--cyan:#22d3ee;--yel:#facc15;--ok:#4ade80;--bad:#f87171;--fg:#f4f1fa;--mut:#a59fb5;--panel:#1b1724;--panel2:#262033}
 *{box-sizing:border-box}
@@ -38,9 +39,9 @@ button.small{font-size:1.8vh;padding:.9vh 1.8vh}
 .bar{width:100%;height:1.1vh;background:#2a2436;border-radius:1vh;overflow:hidden}
 .bar i{display:block;height:100%;width:0;background:var(--cyan)}
 .row{display:flex;gap:1.2vw;flex-wrap:wrap;justify-content:center;align-items:center}
-.pick{display:flex;flex-direction:column;align-items:center;gap:.6vh;background:var(--panel2);border-radius:14px;padding:1vh .8vw;border-top:.7vh solid}
-.pick canvas{width:11vh;height:14vh}
-.pick b{font-size:2vh}
+.pick{display:flex;flex-direction:column;align-items:center;gap:.5vh;background:var(--panel2);border-radius:14px;padding:.8vh .5vw;border-top:.7vh solid;min-width:0}
+.pick canvas{width:9vh;height:11.5vh}
+.pick b{font-size:1.7vh}
 #gohint{color:var(--yel);min-height:2.4vh}
 #countov{background:#0007}
 #count{font-size:30vh;font-weight:900;color:var(--pink);line-height:1}
@@ -97,6 +98,7 @@ button.small{font-size:1.8vh;padding:.9vh 1.8vh}
 
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="personagens.js"></script>
 <script>
 // O telão só MOSTRA: recebe do celular o que desenhar, toca o vídeo e os sons.
 const SITE_ONLINE="https://appdance.netlify.app/"; // usado quando o telão é aberto direto do PC (arquivo)
@@ -111,7 +113,7 @@ const GLIST=[
  {id:'estatua',nome:'Estátua',curta:'Dance e congele',desc:'Dancem com a música e congelem quando aparecer ESTÁTUA. Quem se mexer sai.'},
  {id:'desvia',nome:'Desvia!',curta:'Fuja das bolas de fogo',desc:'Desviem das bolas de fogo com o corpo todo. 3 vidas cada. 60 segundos.'}
 ];
-const CHARS=[['robo','Robô'],['ninja','Ninja'],['gato','Gato'],['astro','Astronauta'],['heroi','Herói'],['palito','Palito']];
+const CHARS=window.CUTE?Object.keys(CUTE).map(id=>[id,CUTE[id].nome]):[['palito','Palito']];
 const STY={
  robo:{body:'#9aa5b1',limb:'#7b8794',dark:'#323f4b',hand:'#cbd2d9'},
  ninja:{body:'#1f2933',limb:'#2d3a48',dark:'#05070a',hand:'#2d3a48'},
@@ -123,7 +125,7 @@ const STY={
 const $=id=>document.getElementById(id);
 const vid=$('vid'),gc=$('gc'),ctx=gc.getContext('2d');
 let peer=null,conn=null,fast=null,code='',tstate='wait';   // wait | lobby | count | play | res
-let scene=null,sceneAt=0,lastSeq=0,feedAr=4/3,tick=null,chars=['robo','ninja','gato'];
+let scene=null,sceneAt=0,lastSeq=0,feedAr=4/3,tick=null,chars=['urso','cachorro','coelho'];
 let CW=0,CH=0,FX=0,FY=0,FW=0,FH=0,rscale=1;
 const hist={};      // histórico de cada jogador, para prever o movimento entre pacotes
 const bgCache={};
@@ -147,6 +149,10 @@ function drawStick(g,k,col,map,lw){
 }
 // desenha o personagem "vestido" no esqueleto. opt: {alpha, gray, label}
 function drawChar(g,k,map,ch,col,opt){
+ if(window.drawCute&&window.CUTE&&CUTE[ch])return drawCute(g,k,map,ch,col,Object.assign({t:performance.now(),seed:Math.max(0,COLORS.indexOf(col))},opt||{}));
+ return drawOld(g,k,map,ch,col,opt);
+}
+function drawOld(g,k,map,ch,col,opt){
  if(!k)return;opt=opt||{};
  g.save();
  g.globalAlpha=opt.alpha||1;
@@ -518,8 +524,8 @@ function buildMenu(){
  renderPicks();
 }
 let picksKey='';
-function renderPicks(){
- const key=chars.join(',');if(key===picksKey)return;picksKey=key;
+function renderPicks(force){
+ const key=chars.join(',');if(key===picksKey&&!force)return;picksKey=key;
  document.querySelectorAll('.pick').forEach((d,i)=>{
   d.querySelector('b').textContent='J'+(i+1)+': '+charName(chars[i]);
   const c=d.querySelector('canvas'),g=c.getContext('2d');g.clearRect(0,0,c.width,c.height);
@@ -665,5 +671,6 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&(tstate==='play'||t
 
 buildMenu();
 startPeer();
+setInterval(()=>{if(tstate==='lobby'||tstate==='wait')renderPicks(true);},120);
 </script>
 </body></html>
