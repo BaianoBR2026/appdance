@@ -33,7 +33,8 @@ canvas{width:100%;border-radius:12px;background:#000}
 .gbtn.sel{border-color:var(--pink);background:#33203a}
 .bar{height:10px;background:#2a2436;border-radius:5px;overflow:hidden}
 .bar i{display:block;height:100%;width:0;background:var(--cyan)}
-#dancebox{display:flex;flex-direction:column;gap:8px;border-top:1px solid #3a3248;padding-top:10px}
+#dancebox,#charbox{display:flex;flex-direction:column;gap:8px;border-top:1px solid #3a3248;padding-top:10px}
+.cbtn{font-size:15px;padding:9px 12px;color:#000}
 .tip{font-size:14px;color:var(--mut)}
 .off{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 </style></head><body>
@@ -69,6 +70,10 @@ canvas{width:100%;border-radius:12px;background:#000}
    <div class="bar"><i id="pfill"></i></div>
    <div class="st" id="pstat">Escolha um vídeo. O celular prepara a dança e manda o vídeo para o telão.</div>
   </div>
+  <div id="charbox">
+   <div class="st">Personagens (toque para trocar):</div>
+   <div class="row" id="chars"></div>
+  </div>
   <div id="why"></div>
   <div class="row"><button id="go">Começar</button><button class="sec" id="tomenu">Menu</button></div>
  </div>
@@ -94,12 +99,14 @@ const BONES=[[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23
 
 const $=id=>document.getElementById(id);
 const cam=$('cam'),cv=$('cv'),ref=$('ref');
-let peer=null,conn=null,lm=null,lmImg=null;
+let peer=null,conn=null,fast=null,lm=null,lmImg=null,seq=0;
+const CHARS=[['robo','Robô'],['ninja','Ninja'],['gato','Gato'],['astro','Astronauta'],['heroi','Herói'],['palito','Palito']];
+let chars=['robo','ninja','gato'];                           // personagem de cada jogador
 let persons=[],feedSeq=0,trackedSeq=-1,feedAr=4/3,lastCamT=-1;
 const CH=1000;let FW=CH*4/3,FH=CH;                          // campo virtual do jogo
 let selGame='danca',game=null,state='lobby',slots=[];
 let coreo=null,coreoKey='',prepping=false,prepPct=0,telVideoReady=false;
-let sndQ=[],lastScene=0,lastLobby=0,lastT=performance.now();
+let sndQ=[],lastScene=0,lastLobby=0,lastT=performance.now(),prevTick=0;
 
 // ================= utilidades =================
 const q=v=>Math.round(v*1000)/1000;
@@ -108,7 +115,19 @@ function scr(p){return [(1-p.x)*FW,p.y*FH];}               // espelhado
 function fmt(s){s=Math.max(0,Math.ceil(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0');}
 function headR(k){if(vis(k[11])>0.4&&vis(k[12])>0.4){const a=scr(k[11]),b=scr(k[12]);return Math.max(8,Math.hypot(a[0]-b[0],a[1]-b[1])*0.35);}return 14;}
 function pack(k){return IDX.map(i=>k[i]?[q(k[i].x),q(k[i].y),Math.round(vis(k[i])*100)/100]:null);}
-function send(m){if(conn&&conn.open)conn.send(m);}
+function send(m){if(conn&&conn.open)conn.send(m);}                 // canal confiável: comandos, vídeo
+function sendFast(m){if(fast&&fast.open)fast.send(m);else send(m);}   // canal rápido: cenas (pode perder pacote, sem atraso)
+function charName(id){const c=CHARS.find(x=>x[0]===id);return c?c[1]:id;}
+function renderChars(){
+ const box=$('chars');box.innerHTML='';
+ chars.forEach((ch,i)=>{
+  const b=document.createElement('button');b.className='cbtn';b.style.background=COLORS[i];
+  b.textContent='J'+(i+1)+': '+charName(ch);
+  b.onclick=()=>{const idx=CHARS.findIndex(x=>x[0]===chars[i]);setChar(i,CHARS[(idx+1)%CHARS.length][0]);};
+  box.appendChild(b);
+ });
+}
+function setChar(i,ch){if(i<0||i>2||!CHARS.some(x=>x[0]===ch))return;chars[i]=ch;renderChars();lastLobby=0;}
 function ang(a,b,c){const r=Math.atan2(c.y-b.y,c.x-b.x)-Math.atan2(a.y-b.y,a.x-b.x);let d=Math.abs(r*180/Math.PI);return d>180?360-d:d;}
 function angles(k,W,H){
  const o={};let n=0;
@@ -471,7 +490,7 @@ function toLobby(){
 }
 function sendLobby(){
  const vp=visiblePeople().slice(0,3),w=whyNot();
- send({type:'lobby',sel:selGame,why:w,dance:{t:$('pstat').textContent,p:prepPct},ar:feedAr,ps:vp.map(o=>pack(o.k))});
+ sendFast({type:'lobby',s:++seq,sel:selGame,why:w,dance:{t:$('pstat').textContent,p:prepPct},ar:q(feedAr),ch:chars,ps:vp.map(o=>pack(o.k))});
  $('why').textContent=w;$('go').disabled=!!w;
 }
 
@@ -485,7 +504,7 @@ $('con').onclick=async()=>{
  $('con').disabled=true;
  try{
   st('Ligando a câmera...');
-  const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:$('camsel').value,width:{ideal:640},height:{ideal:480}},audio:false});
+  const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:$('camsel').value,width:{ideal:480},height:{ideal:360},frameRate:{ideal:30}},audio:false});
   cam.srcObject=stream;await cam.play();
   feedAr=cam.videoWidth/cam.videoHeight;FW=CH*feedAr;
   st('Carregando o detector de poses...');
@@ -495,7 +514,7 @@ $('con').onclick=async()=>{
   cv.width=cam.videoWidth;cv.height=cam.videoHeight;
   $('s1').hidden=true;$('s2').hidden=false;
   $('st2').innerHTML='<b>Conectado ao telão!</b> Escolha o jogo aqui ou no telão.';
-  buildMenu();selectGame('danca');
+  buildMenu();selectGame('danca');renderChars();
   keepAwake();
   requestAnimationFrame(loop);
  }catch(e){
@@ -510,8 +529,13 @@ function connect(code){
   const to=setTimeout(()=>fail('não achei o telão com esse código. Confira o código e se o telão está aberto.'),15000);
   peer=new Peer();
   peer.on('open',()=>{
-   conn=peer.connect('jdanca-'+code,{reliable:true});
-   conn.on('open',()=>{if(done)return;done=true;clearTimeout(to);res();});
+   conn=peer.connect('jdanca-'+code,{label:'ctl',reliable:true});
+   conn.on('open',()=>{
+    if(done)return;done=true;clearTimeout(to);
+    // segundo canal, rápido e sem fila, só para as cenas do jogo
+    try{fast=peer.connect('jdanca-'+code,{label:'fast',reliable:false,serialization:'json'});fast.on('data',onMsg);}catch(_){fast=null;}
+    res();
+   });
    conn.on('data',onMsg);
    conn.on('close',()=>{if(state==='play'||state==='count'){state='lobby';}$('st2').textContent='O telão desconectou. Recarregue esta página para conectar de novo.';$('go').disabled=true;});
   });
@@ -522,6 +546,7 @@ function onMsg(m){
  if(!m||!m.type)return;
  if(m.type==='busy')$('st2').textContent='Esse telão já tem outro celular conectado.';
  else if(m.type==='select')selectGame(m.id);
+ else if(m.type==='char')setChar(m.i,m.ch);
  else if(m.type==='start'){if(state==='lobby'||state==='res')startGame();}
  else if(m.type==='menu')toLobby();
  else if(m.type==='sample')selectVideo('danca-exemplo.mp4','Vídeo de exemplo',null);
@@ -535,7 +560,10 @@ function onMsg(m){
 function loop(){
  const now=performance.now(),dt=Math.min(0.1,(now-lastT)/1000);lastT=now;
  const cx=cv.getContext('2d'),W=cv.width,H=cv.height;
- cx.save();cx.scale(-1,1);cx.drawImage(cam,-W,0,W,H);cx.restore();
+ const playingNow=state==='play'||state==='count';
+ // durante o jogo a prévia no celular atualiza menos, para sobrar processador
+ const drawPrev=!playingNow||(++prevTick%4===0);
+ if(drawPrev){cx.save();cx.scale(-1,1);cx.drawImage(cam,-W,0,W,H);cx.restore();}
  if(cam.currentTime!==lastCamT){
   lastCamT=cam.currentTime;
   const r=lm.detectForVideo(cam,now);
@@ -548,14 +576,16 @@ function loop(){
  }
  // prévia no celular
  const list=playing?slots.map(s=>s.k):visiblePeople().slice(0,3).map(o=>o.k);
- list.forEach((k,i)=>{
+ if(drawPrev)list.forEach((k,i)=>{
   if(!k)return;
   cx.strokeStyle=COLORS[i];cx.lineWidth=Math.max(3,W/110);cx.lineCap='round';
   for(const [a,b] of BONES){if(vis(k[a])<0.4||vis(k[b])<0.4)continue;cx.beginPath();cx.moveTo((1-k[a].x)*W,k[a].y*H);cx.lineTo((1-k[b].x)*W,k[b].y*H);cx.stroke();}
  });
- if(playing&&game&&now-lastScene>40){
+ if(playing&&game&&now-lastScene>=32){
   lastScene=now;
-  send(Object.assign({type:'scene',g:game.id,ar:q(feedAr),snd:sndQ.splice(0)},game.scene()));
+  const snd=sndQ.splice(0);
+  sendFast(Object.assign({type:'scene',s:++seq,g:game.id,ar:q(feedAr),ch:chars},game.scene()));
+  if(snd.length)send({type:'snd',l:snd});                       // sons vão pelo canal confiável (não podem se perder)
  }
  if(!playing&&now-lastLobby>200){
   lastLobby=now;
