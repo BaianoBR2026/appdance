@@ -81,6 +81,7 @@ button.small{font-size:1.8vh;padding:.9vh 1.8vh}
    <div class="row" id="picks"></div>
   </div>
  </div>
+ <div id="diag" class="st" style="font-size:1.6vh"></div>
  <div id="gohint" class="st"></div>
  <div class="row"><button id="go" disabled>Começar</button><button class="sec" id="fs">Tela cheia</button></div>
 </div>
@@ -123,12 +124,12 @@ const $=id=>document.getElementById(id);
 const vid=$('vid'),gc=$('gc'),ctx=gc.getContext('2d');
 let peer=null,conn=null,fast=null,code='',tstate='wait';   // wait | lobby | count | play | res
 let scene=null,sceneAt=0,lastSeq=0,feedAr=4/3,tick=null,chars=['robo','ninja','gato'];
-let CW=0,CH=0,FX=0,FY=0,FW=0,FH=0;
+let CW=0,CH=0,FX=0,FY=0,FW=0,FH=0,rscale=1;
 const hist={};      // histórico de cada jogador, para prever o movimento entre pacotes
 const bgCache={};
 
 // ================= tela =================
-function resize(){CW=gc.width=innerWidth;CH=gc.height=innerHeight;fit();for(const k in bgCache)delete bgCache[k];}
+function resize(){CW=gc.width=Math.round(innerWidth*rscale);CH=gc.height=Math.round(innerHeight*rscale);fit();for(const k in bgCache)delete bgCache[k];}
 function fit(){FW=CW;FH=FW/feedAr;if(FH>CH){FH=CH;FW=FH*feedAr;}FX=(CW-FW)/2;FY=(CH-FH)/2;}
 addEventListener('resize',resize);resize();
 function unpack(arr){if(!arr)return null;const k=new Array(33).fill(null);IDX.forEach((idx,j)=>{const a=arr[j];if(a)k[idx]={x:a[0],y:a[1],v:a[2]};});return k;}
@@ -253,23 +254,43 @@ const SAMPLE=(()=>{const k=new Array(33).fill(null);const s=(i,x,y)=>k[i]={x,y,v
  s(23,0.44,0.6);s(24,0.56,0.6);s(25,0.43,0.75);s(26,0.57,0.75);s(27,0.42,0.9);s(28,0.58,0.9);return k;})();
 
 // ================= previsão de movimento =================
+// Compensação de atraso: usa a velocidade de cada ponto do corpo e desenha o personagem
+// "um pouco no futuro", o equivalente ao tempo que a imagem levou da câmera até aqui.
+let rtt=30,pipeLat=60,lagMode=1;   // lagMode: 1 = compensação ligada
 function storePlayers(m,now){
  const seen=new Set();
+ if(m.lt)pipeLat=pipeLat*0.8+m.lt*0.2;
  for(const p of m.pl||[]){
   seen.add(p.c);
   const h=hist[p.c]||(hist[p.c]={});
   const k=unpack(p.k);
-  if(k){h.pk=h.ck;h.pt=h.ct;h.ck=k;h.ct=now;}else{h.ck=null;h.pk=null;}
+  if(k){
+   const ts=m.ts||now;
+   if(h.ck&&ts>h.cts){                                   // imagem nova da câmera
+    const dt=ts-h.cts;
+    if(dt<200){
+     h.v=k.map((pt,i)=>{const q=h.ck[i];if(!pt||!q||pt.v<0.4||q.v<0.4)return null;
+      const vx=(pt.x-q.x)/dt,vy=(pt.y-q.y)/dt,o=h.v&&h.v[i];
+      return o?{x:o.x*0.4+vx*0.6,y:o.y*0.4+vy*0.6}:{x:vx,y:vy};});
+    }else h.v=null;
+    h.ck=k;h.cts=ts;h.ct=now;
+   }else if(!h.ck){h.ck=k;h.cts=ts;h.ct=now;h.v=null;}
+  }else{h.ck=null;h.v=null;}
   h.g=p.g;h.b=p.b;h.x=p.x;
  }
  for(const c in hist)if(!seen.has(+c))delete hist[c];
 }
 function kNow(c,now){
  const h=hist[c];if(!h||!h.ck)return null;
- if(!h.pk)return h.ck;
- const dt=h.ct-h.pt;if(dt<=0||dt>250)return h.ck;
- const f=Math.min(1,(now-h.ct)/dt)*0.85;           // avança até ~1 intervalo à frente
- return h.ck.map((p,i)=>{const q=h.pk[i];if(!p||!q||p.v<0.4||q.v<0.4)return p;return{x:p.x+(p.x-q.x)*f,y:p.y+(p.y-q.y)*f,v:p.v};});
+ if(!lagMode||!h.v)return h.ck;
+ // quanto prever: atraso câmera+detecção + metade da ida e volta da rede + tempo desde que o pacote chegou
+ const ahead=Math.min(140,pipeLat*0.7+rtt/2+(now-h.ct));
+ return h.ck.map((p,i)=>{
+  const v=h.v[i];if(!p||!v)return p;
+  let dx=v.x*ahead,dy=v.y*ahead;
+  const m=Math.hypot(dx,dy);if(m>0.08){dx*=0.08/m;dy*=0.08/m;}   // limita para não "passar do ponto"
+  return{x:p.x+dx,y:p.y+dy,v:p.v};
+ });
 }
 
 // ================= cenários (desenhados uma vez e guardados) =================
@@ -434,12 +455,44 @@ function drawScene(now){
  bigText(S.big);
 }
 
+// Resolução adaptativa: se este aparelho (projetor) estiver lento, desenha em resolução menor
+let fAvg=16,lastF=0,slowSince=0;
+function adaptScale(now){
+ if(lastF){fAvg=fAvg*0.95+Math.min(100,now-lastF)*0.05;}lastF=now;
+ if(tstate!=='play')return;
+ if(fAvg>24&&rscale>0.5){if(!slowSince)slowSince=now;else if(now-slowSince>1500){rscale=rscale>0.75?0.75:0.5;resize();slowSince=0;}}
+ else slowSince=0;
+}
+function drawDiag(){
+ ctx.save();ctx.font='600 '+Math.max(11,CH*0.018)+'px system-ui,sans-serif';ctx.textAlign='left';ctx.textBaseline='bottom';
+ ctx.fillStyle='rgba(255,255,255,.55)';
+ ctx.fillText('rede '+Math.round(rtt/2)+' ms · câmera '+Math.round(pipeLat)+' ms'+(rscale<1?' · resolução '+Math.round(rscale*100)+'%':''),CW*0.01,CH*0.995);
+ ctx.restore();
+}
 function frame(now){
+ adaptScale(now);
  ctx.clearRect(0,0,CW,CH);
- if(tstate==='play'||tstate==='count')drawScene(now);
+ if(tstate==='play'||tstate==='count'){drawScene(now);drawDiag();}
  requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// mede o tempo da rede (ida e volta) a cada segundo
+setInterval(()=>{const ch=fast&&fast.open?fast:conn;if(ch&&ch.open)ch.send({type:'ping',t:performance.now()});},1000);
+// descobre se a conexão é direta pelo Wi-Fi ou passa pela internet
+let connKind='';
+async function checkConnKind(){
+ try{
+  const pc=(fast&&fast.peerConnection)||(conn&&conn.peerConnection);if(!pc)return;
+  const stats=await pc.getStats();let pair=null;const cands={};
+  stats.forEach(s=>{if(s.type==='candidate-pair'&&s.state==='succeeded'&&(s.nominated||s.selected))pair=s;if(s.type==='local-candidate'||s.type==='remote-candidate')cands[s.id]=s;});
+  if(!pair)return;
+  const l=cands[pair.localCandidateId],r=cands[pair.remoteCandidateId];
+  const t=[l&&l.candidateType,r&&r.candidateType];
+  connKind=t.includes('relay')?'por servidor (mais lento)':(t[0]==='host'&&t[1]==='host')?'direta pelo Wi-Fi':'pela internet';
+ }catch(_){}
+}
+setInterval(checkConnKind,3000);
 
 // ================= lobby =================
 function charName(id){const c=CHARS.find(x=>x[0]===id);return c?c[1]:id;}
@@ -478,6 +531,13 @@ function markGame(id){
 function showLobby(m){
  if(m.ar&&Math.abs(m.ar-feedAr)>0.01){feedAr=m.ar;fit();}
  if(m.ch){chars=m.ch.slice(0,3);renderPicks();}
+ if(m.dg){
+  pipeLat=m.dg.lt||pipeLat;
+  const slow=m.dg.det>45||!m.dg.gpu;
+  $('diag').innerHTML='Conexão '+(connKind||'...')+' · rede '+Math.round(rtt/2)+' ms · câmera '+(m.dg.lt||'?')+' ms ('+(m.dg.gpu?'GPU':'<b style="color:var(--yel)">sem GPU</b>')+', '+m.dg.det+' ms por imagem)'+
+   (connKind&&connKind!=='direta pelo Wi-Fi'?'<br><b style="color:var(--yel)">Dica: coloque o celular e o telão no mesmo Wi-Fi para menos atraso.</b>':'')+
+   (slow?'<br><b style="color:var(--yel)">O celular está analisando devagar. Feche outros apps e use o Chrome atualizado.</b>':'');
+ }
  markGame(m.sel);
  $('gohint').textContent=m.why||'';$('go').disabled=!!m.why;
  if(m.dance){$('pstat').textContent=m.dance.t;$('pfill').style.width=(m.dance.p||0)+'%';}
@@ -548,6 +608,7 @@ function startPeer(){
 }
 function onMsg(m){
  if(!m||!m.type)return;
+ if(m.type==='pong'){const r=performance.now()-m.t;if(r>0&&r<2000)rtt=rtt*0.7+r*0.3;return;}
  if(m.s){if(m.s<=lastSeq)return;lastSeq=m.s;}       // descarta pacote velho que chegou atrasado
  switch(m.type){
   case 'lobby':
