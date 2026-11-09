@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Jogo de Dança - Modo Vídeo</title>
+<style>
+:root{--bg:#0f0d14;--panel:#1b1724;--fg:#f4f1fa;--mut:#a59fb5;--pink:#ff2d7a;--cyan:#22d3ee;--ok:#4ade80;--mid:#facc15;--bad:#f87171}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,"Segoe UI",sans-serif}
+main{max-width:1100px;margin:0 auto;padding:16px}
+h1{font-size:28px;margin:8px 0 4px}
+.sub{color:var(--mut);margin:0 0 16px}
+.step{background:var(--panel);border-radius:14px;padding:16px;margin-bottom:12px}
+.step h2{font-size:18px;margin:0 0 8px}
+.step p{color:var(--mut);margin:4px 0 10px}
+button{font:inherit;font-size:18px;font-weight:700;padding:12px 24px;border:0;border-radius:999px;background:var(--pink);color:#fff;cursor:pointer}
+button:disabled{opacity:.4;cursor:default}
+button.sec{background:#3a3248}
+input[type=file]{font-size:16px;color:var(--fg)}
+.bar{height:10px;background:#2a2436;border-radius:5px;overflow:hidden;margin:10px 0}
+.bar i{display:block;height:100%;width:0;background:var(--cyan)}
+#prev{max-width:100%;max-height:300px;border-radius:10px;display:none;margin-top:8px}
+#stage{position:relative;background:#000;border-radius:14px;overflow:hidden;display:none}
+#stage video{display:block;width:100%;max-height:85vh;object-fit:contain;background:#000}
+#stage:fullscreen{border-radius:0}
+#stage:fullscreen video{height:100vh;max-height:100vh}
+#camc{position:absolute;right:12px;bottom:22px;width:26%;border-radius:10px;border:3px solid var(--cyan);background:#000}
+#hud{position:absolute;left:0;right:0;top:0;display:flex;justify-content:space-between;align-items:flex-start;padding:12px 16px;font-weight:800;font-size:22px;text-shadow:0 2px 6px #000;pointer-events:none}
+#fb{font-size:48px;letter-spacing:1px}
+#pbar{position:absolute;left:0;right:0;bottom:0;height:8px;background:#0008}
+#pbar i{display:block;height:100%;width:0;background:var(--pink)}
+#res{position:absolute;inset:0;background:#000c;display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;padding:16px}
+#res h2{font-size:40px;margin:0}
+#res .big{font-size:64px;font-weight:900;color:var(--pink)}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+#err{color:var(--bad);margin-top:8px}
+</style></head><body>
+<main>
+<h1>Jogo de Dança — Modo Vídeo</h1>
+<p class="sub">Escolha um vídeo de alguém dançando. O jogo aprende os movimentos do vídeo e depois compara com os seus pela webcam.</p>
+
+<div id="setup">
+ <div class="step"><h2>1. Escolha o vídeo da coreografia</h2>
+  <p>O dançarino precisa aparecer de corpo inteiro, de frente para a câmera e bem iluminado.</p>
+  <input type="file" id="file" accept="video/*">
+ </div>
+ <div class="step"><h2>2. Preparar a coreografia</h2>
+  <p>O jogo assiste ao vídeo e anota as poses. Demora mais ou menos o tempo do vídeo. Só precisa fazer uma vez por vídeo.</p>
+  <button id="prep" disabled>Preparar</button>
+  <div class="bar"><i id="pfill"></i></div>
+  <div id="pstat"></div>
+  <canvas id="prev"></canvas>
+ </div>
+ <div class="step"><h2>3. Jogar</h2>
+  <p>Fique de frente para a webcam, longe o bastante para aparecer de corpo inteiro. Dance espelhado, como se o vídeo fosse um espelho.</p>
+  <button id="play" disabled>Jogar</button>
+  <div id="err"></div>
+ </div>
+</div>
+
+<div id="stage">
+ <video id="vid" playsinline></video>
+ <canvas id="camc" width="320" height="240"></canvas>
+ <div id="hud"><div>Pontos: <span id="pts">0</span></div><div id="fb"></div><div id="acc">--%</div></div>
+ <div id="pbar"><i id="pb"></i></div>
+ <div id="res">
+  <h2>Fim da música!</h2>
+  <div class="big" id="rpts">0</div>
+  <div id="rdet"></div>
+  <div class="row"><button id="again">Jogar de novo</button><button class="sec" id="back">Trocar vídeo</button></div>
+ </div>
+</div>
+<div class="row" id="ctl" style="display:none;margin-top:10px"><button class="sec" id="fs">Tela cheia</button><button class="sec" id="stop">Parar</button></div>
+<video id="cam" playsinline muted style="display:none"></video>
+</main>
+
+<script type="module">
+import {PoseLandmarker,FilesetResolver} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const $=id=>document.getElementById(id);
+const WASM="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const MODEL="https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+const STEP=0.2;   // de quanto em quanto tempo (s) anota uma pose do vídeo
+const BEAT=1.0;   // de quanto em quanto tempo (s) dá uma nota
+// Articulações comparadas: [ponto A, vértice, ponto C]
+const J={lSh:[23,11,13],rSh:[24,12,14],lEl:[11,13,15],rEl:[12,14,16],lHip:[11,23,25],rHip:[12,24,26],lKn:[23,25,27],rKn:[24,26,28]};
+const MIR={lSh:'rSh',rSh:'lSh',lEl:'rEl',rEl:'lEl',lHip:'rHip',rHip:'lHip',lKn:'rKn',rKn:'lKn'};
+const BONES=[[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28]];
+
+let fset=null,lmImg=null,lmCam=null,coreo=null,key='';
+const vid=$('vid'),cam=$('cam');
+
+async function getFs(){if(!fset)fset=await FilesetResolver.forVisionTasks(WASM);return fset;}
+async function makeLm(mode){
+ const f=await getFs();
+ try{return await PoseLandmarker.createFromOptions(f,{baseOptions:{modelAssetPath:MODEL,delegate:"GPU"},runningMode:mode,numPoses:1});}
+ catch(e){return await PoseLandmarker.createFromOptions(f,{baseOptions:{modelAssetPath:MODEL,delegate:"CPU"},runningMode:mode,numPoses:1});}
+}
+function ang(a,b,c){const r=Math.atan2(c.y-b.y,c.x-b.x)-Math.atan2(a.y-b.y,a.x-b.x);let d=Math.abs(r*180/Math.PI);return d>180?360-d:d;}
+function vis(p){return p.visibility===undefined?1:p.visibility;}
+function angles(k,W,H){
+ const o={};let n=0;
+ for(const [name,[a,b,c]] of Object.entries(J)){
+  if(Math.min(vis(k[a]),vis(k[b]),vis(k[c]))<0.5){o[name]=null;continue;}
+  const P=i=>({x:k[i].x*W,y:k[i].y*H});
+  o[name]=Math.round(ang(P(a),P(b),P(c)));n++;
+ }
+ return n>=3?o:null;
+}
+function compare(A,B,swap){
+ let s=0,n=0;
+ for(const name in J){const m=swap?MIR[name]:name;if(A[name]!=null&&B[m]!=null){s+=Math.abs(A[name]-B[m]);n++;}}
+ if(n<3)return 0;
+ return Math.max(0,100-(s/n)*1.5);
+}
+function drawSkel(ctx,k,W,H,color,mirror){
+ ctx.strokeStyle=color;ctx.lineWidth=Math.max(3,W/120);ctx.lineCap='round';
+ for(const [a,b] of BONES){
+  if(vis(k[a])<0.4||vis(k[b])<0.4)continue;
+  const xa=mirror?1-k[a].x:k[a].x,xb=mirror?1-k[b].x:k[b].x;
+  ctx.beginPath();ctx.moveTo(xa*W,k[a].y*H);ctx.lineTo(xb*W,k[b].y*H);ctx.stroke();
+ }
+}
+
+// 1. Escolher vídeo
+$('file').onchange=e=>{
+ const file=e.target.files[0];if(!file)return;
+ vid.src=URL.createObjectURL(file);
+ key='coreo:'+file.name+':'+file.size;
+ coreo=null;
+ try{const s=localStorage.getItem(key);if(s)coreo=JSON.parse(s);}catch(_){}
+ $('prep').disabled=false;
+ if(coreo){$('pstat').textContent='Esse vídeo já foi preparado antes. Pode jogar direto.';$('pfill').style.width='100%';$('play').disabled=false;}
+ else{$('pstat').textContent='Vídeo carregado. Agora clique em Preparar.';$('pfill').style.width='0';$('play').disabled=true;}
+};
+
+// 2. Preparar: assiste o vídeo e anota as poses
+function seek(t){return new Promise(r=>{const h=()=>{vid.removeEventListener('seeked',h);r();};vid.addEventListener('seeked',h);vid.currentTime=t;});}
+$('prep').onclick=async()=>{
+ const b=$('prep');b.disabled=true;$('play').disabled=true;$('file').disabled=true;
+ $('pstat').textContent='Carregando o detector de poses...';
+ try{
+  if(!lmImg)lmImg=await makeLm("IMAGE");
+  if(vid.readyState<1)await new Promise(r=>vid.addEventListener('loadedmetadata',r,{once:true}));
+  vid.muted=true;vid.pause();
+  const dur=vid.duration,W=vid.videoWidth,H=vid.videoHeight;
+  const pc=$('prev');pc.width=Math.min(640,W);pc.height=Math.round(pc.width*H/W);pc.style.display='block';
+  const px=pc.getContext('2d');
+  const out=[];let found=0;
+  for(let t=0;t<dur;t+=STEP){
+   await seek(t);
+   const r=lmImg.detect(vid);
+   const k=r.landmarks&&r.landmarks[0];
+   const a=k?angles(k,W,H):null;
+   if(a)found++;
+   out.push({t:+t.toFixed(2),a});
+   px.drawImage(vid,0,0,pc.width,pc.height);
+   if(k)drawSkel(px,k,pc.width,pc.height,'#22d3ee',false);
+   const p=Math.min(100,Math.round(t/dur*100));
+   $('pfill').style.width=p+'%';$('pstat').textContent='Analisando a dança: '+p+'%';
+  }
+  if(found<5)throw new Error('não encontrei o dançarino no vídeo. Use um vídeo com a pessoa de corpo inteiro e bem iluminada.');
+  coreo=out;
+  try{localStorage.setItem(key,JSON.stringify(out));}catch(_){}
+  $('pfill').style.width='100%';
+  $('pstat').textContent='Pronto! Encontrei o dançarino em '+Math.round(found/out.length*100)+'% do vídeo. Agora é só jogar.';
+  $('play').disabled=false;
+ }catch(e){$('pstat').textContent='Erro: '+e.message;}
+ b.disabled=false;$('file').disabled=false;
+};
+
+// 3. Jogar
+let pts=0,bucket=-1,bScores=[],stats={},playing=false,lastCamT=-1,lastPlayer=null;
+function resetGame(){pts=0;bucket=-1;bScores=[];stats={p:0,b:0,e:0,sum:0,n:0};$('pts').textContent='0';$('fb').textContent='';$('acc').textContent='--%';$('res').style.display='none';}
+
+$('play').onclick=async()=>{
+ $('err').textContent='';
+ const b=$('play');b.disabled=true;b.textContent='Carregando...';
+ try{
+  if(!lmCam)lmCam=await makeLm("VIDEO");
+  if(!cam.srcObject){
+   const st=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:640},height:{ideal:480}},audio:false});
+   cam.srcObject=st;await cam.play();
+  }
+  const cc=$('camc');cc.width=cam.videoWidth;cc.height=cam.videoHeight;
+  $('setup').style.display='none';$('stage').style.display='block';$('ctl').style.display='flex';
+  startSong();
+ }catch(e){$('err').textContent='Não consegui abrir a câmera: '+e.message;}
+ b.disabled=false;b.textContent='Jogar';
+};
+
+function startSong(){resetGame();vid.muted=false;vid.currentTime=0;vid.play();playing=true;requestAnimationFrame(loop);}
+
+function refAt(t){ // poses do vídeo entre t-0.5s e t+0.1s (dá tempo de reação)
+ const out=[];
+ const i0=Math.max(0,Math.floor((t-0.5)/STEP)),i1=Math.min(coreo.length-1,Math.ceil((t+0.1)/STEP));
+ for(let i=i0;i<=i1;i++)if(coreo[i].a)out.push(coreo[i].a);
+ return out;
+}
+
+function judge(){
+ if(!bScores.length)return;
+ const avg=bScores.reduce((a,b)=>a+b,0)/bScores.length;
+ stats.sum+=avg;stats.n++;
+ const fb=$('fb');
+ if(avg>=75){fb.textContent='PERFEITO!';fb.style.color='var(--ok)';pts+=100;stats.p++;}
+ else if(avg>=50){fb.textContent='BOM';fb.style.color='var(--mid)';pts+=50;stats.b++;}
+ else{fb.textContent='ERROU';fb.style.color='var(--bad)';stats.e++;}
+ $('pts').textContent=pts;
+}
+
+function loop(){
+ if(!playing)return;
+ const now=performance.now();
+ const cc=$('camc'),cx=cc.getContext('2d');
+ cx.save();cx.scale(-1,1);cx.drawImage(cam,-cc.width,0,cc.width,cc.height);cx.restore();
+ if(cam.currentTime!==lastCamT){
+  lastCamT=cam.currentTime;
+  const r=lmCam.detectForVideo(cam,now);
+  lastPlayer=(r.landmarks&&r.landmarks[0])||null;
+ }
+ let pa=null;
+ if(lastPlayer){drawSkel(cx,lastPlayer,cc.width,cc.height,'#4ade80',true);pa=angles(lastPlayer,cc.width,cc.height);}
+ const t=vid.currentTime;
+ const refs=refAt(t);
+ if(refs.length){
+  let best=0;
+  if(pa)for(const R of refs){const s=Math.max(compare(pa,R,false),compare(pa,R,true));if(s>best)best=s;}
+  bScores.push(best);
+  $('acc').textContent=Math.round(best)+'%';
+ }
+ const bk=Math.floor(t/BEAT);
+ if(bk!==bucket){if(bucket>=0)judge();bucket=bk;bScores=[];}
+ if(vid.duration)$('pb').style.width=(t/vid.duration*100)+'%';
+ requestAnimationFrame(loop);
+}
+
+vid.addEventListener('ended',()=>{
+ if(!playing)return;
+ judge();playing=false;
+ const acc=stats.n?Math.round(stats.sum/stats.n):0;
+ $('rpts').textContent=pts+' pontos';
+ $('rdet').textContent='Precisão média: '+acc+'%  ·  Perfeito: '+stats.p+'  ·  Bom: '+stats.b+'  ·  Errou: '+stats.e;
+ $('res').style.display='flex';
+});
+$('again').onclick=()=>startSong();
+function backToSetup(){playing=false;vid.pause();if(document.fullscreenElement)document.exitFullscreen();$('stage').style.display='none';$('ctl').style.display='none';$('setup').style.display='block';}
+$('back').onclick=backToSetup;
+$('stop').onclick=backToSetup;
+$('fs').onclick=()=>{if(document.fullscreenElement)document.exitFullscreen();else $('stage').requestFullscreen().catch(()=>{});};
+</script>
+</body></html>

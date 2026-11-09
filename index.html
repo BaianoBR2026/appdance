@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AppDance</title>
+<style>
+:root{--bg:#0f0d14;--panel:#1b1724;--fg:#f4f1fa;--mut:#a59fb5;--pink:#ff2d7a;--cyan:#22d3ee}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,"Segoe UI",sans-serif}
+main{max-width:760px;margin:0 auto;padding:24px 16px;display:flex;flex-direction:column;gap:14px}
+h1{font-size:34px;margin:0}
+.sub{color:var(--mut);margin:0 0 6px}
+a.op{display:flex;flex-direction:column;gap:4px;background:var(--panel);border-radius:16px;padding:18px 20px;color:var(--fg);text-decoration:none;border:2px solid transparent}
+a.op:hover,a.op:focus-visible{border-color:var(--pink);outline:none}
+a.op b{font-size:21px}
+a.op span{color:var(--mut)}
+.tag{display:inline-block;font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cyan)}
+</style></head><body>
+<main>
+<h1>App<span style="color:var(--pink)">Dance</span></h1>
+<p class="sub">Escolha onde este aparelho vai ser usado.</p>
+<a class="op" href="tela.html"><span class="tag">Projetor, TV ou PC</span><b>Telão</b><span>Só mostra o jogo: vídeo, placar, esqueletos e sons. Abra no aparelho que fica na parede. Não precisa de processador bom.</span></a>
+<a class="op" href="celular.html"><span class="tag">Celular</span><b>Câmera</b><span>O cérebro do jogo: filma até 3 pessoas, roda os jogos e conta os pontos. Conecta no telão pelo QR code.</span></a>
+<a class="op" href="solo.html"><span class="tag">PC ou celular</span><b>Dança num aparelho só</b><span>Só a dança, tudo num aparelho: o vídeo na tela e a câmera do próprio aparelho.</span></a>
+<a class="op" href="poses.html"><span class="tag">Teste</span><b>Treino de poses</b><span>O primeiro protótipo, com o boneco de palito.</span></a>
+<p class="sub" style="margin-top:8px">Jogos: Dança, Estoura Balões, Corrida Parada, Estátua e Desvia! De 1 a 3 jogadores.<br>Testar só no PC: abra o Telão numa janela e a Câmera em outra janela do Chrome.</p>
+</main>
+</body></html>

@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Jogo de Dança - Protótipo</title>
+<style>
+body{margin:0;background:#111;color:#fff;font-family:sans-serif;text-align:center}
+#wrap{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;padding:10px}
+.box{background:#000;border-radius:12px;overflow:hidden}
+video{display:none}
+canvas{display:block;max-width:92vw;height:auto}
+#start{font-size:22px;padding:14px 30px;border:0;border-radius:30px;background:#e91e63;color:#fff;margin:10px}
+#hud{font-size:22px;margin:6px}#fb{font-size:40px;font-weight:bold;height:50px}
+#err{color:#f88;padding:0 16px}
+p{padding:0 16px}
+</style></head><body>
+<h2>Jogo de Dança — Protótipo</h2>
+<p>Coloque o celular parado, a uns 2 a 3 metros, pegando seu corpo inteiro. Copie o boneco azul.</p>
+<button id="start">Começar</button>
+<div id="err"></div>
+<div id="hud">Pontos: <span id="pts">0</span> | Movimento: <span id="nome">-</span></div>
+<div id="fb"></div>
+<div id="wrap">
+ <div class="box"><canvas id="alvo" width="320" height="400"></canvas></div>
+ <div class="box"><canvas id="cam" width="480" height="640"></canvas></div>
+</div>
+<video id="v" playsinline muted></video>
+<script type="module">
+import {PoseLandmarker,FilesetResolver} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+// s = ângulo do ombro (0 = braço para baixo, 90 = horizontal, 180 = para cima)
+// e = ângulo do cotovelo (180 = esticado, 90 = dobrado)
+const POSES=[
+ {n:"Braços para cima",s:170,e:175},
+ {n:"Braços abertos",s:90,e:175},
+ {n:"Bíceps!",s:90,e:90},
+ {n:"Braços para baixo",s:15,e:175},
+ {n:"Braços em V",s:135,e:175}
+];
+const T=3000; // tempo de cada movimento (ms)
+
+const $=id=>document.getElementById(id);
+const v=$('v'),cv=$('cam'),cx=cv.getContext('2d'),av=$('alvo'),ax=av.getContext('2d');
+let lm,pts=0,start=0,idx=-1,best=0;
+
+function ang(a,b,c){
+ const r=Math.atan2(c.y-b.y,c.x-b.x)-Math.atan2(a.y-b.y,a.x-b.x);
+ let d=Math.abs(r*180/Math.PI);return d>180?360-d:d;
+}
+
+function drawAlvo(p,prog){
+ ax.fillStyle='#000';ax.fillRect(0,0,320,400);
+ ax.strokeStyle='#29b6f6';ax.lineWidth=10;ax.lineCap='round';ax.lineJoin='round';
+ ax.beginPath();ax.arc(160,95,26,0,Math.PI*2);ax.stroke();           // cabeça
+ ax.beginPath();ax.moveTo(160,121);ax.lineTo(160,250);ax.stroke();     // tronco
+ ax.beginPath();ax.moveTo(120,140);ax.lineTo(200,140);ax.stroke();     // ombros
+ ax.beginPath();ax.moveTo(160,250);ax.lineTo(130,370);ax.moveTo(160,250);ax.lineTo(190,370);ax.stroke(); // pernas
+ const L=62;
+ for(const side of[-1,1]){
+  const ox=side<0?120:200,oy=140;
+  const t1=p.s*Math.PI/180, t2=(p.s+(180-p.e))*Math.PI/180;
+  const ex=ox+side*L*Math.sin(t1), ey=oy+L*Math.cos(t1);
+  const wx=ex+side*L*Math.sin(t2), wy=ey+L*Math.cos(t2);
+  ax.beginPath();ax.moveTo(ox,oy);ax.lineTo(ex,ey);ax.lineTo(wx,wy);ax.stroke();
+ }
+ ax.fillStyle='#e91e63';ax.fillRect(0,392,320*prog,8);
+ ax.fillStyle='#fff';ax.font='bold 20px sans-serif';ax.textAlign='left';ax.fillText(p.n,10,28);
+}
+
+function score(k,p){
+ const W=cv.width,H=cv.height,P=i=>({x:k[i].x*W,y:k[i].y*H});
+ const d=[
+  Math.abs(ang(P(23),P(11),P(13))-p.s), Math.abs(ang(P(24),P(12),P(14))-p.s),
+  Math.abs(ang(P(11),P(13),P(15))-p.e), Math.abs(ang(P(12),P(14),P(16))-p.e)
+ ];
+ const m=d.reduce((a,b)=>a+b)/4;
+ return Math.max(0,100-m*1.6);
+}
+
+const C=[[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28]];
+
+function loop(){
+ const now=performance.now();
+ cx.save();cx.scale(-1,1);cx.drawImage(v,-cv.width,0,cv.width,cv.height);cx.restore();
+ const t=now-start,i=Math.floor(t/T)%POSES.length,prog=(t%T)/T;
+ if(i!==idx){
+  if(idx>=0){
+   const fb=$('fb');
+   if(best>80){fb.textContent='PERFEITO!';fb.style.color='#4caf50';pts+=100}
+   else if(best>55){fb.textContent='BOM';fb.style.color='#ffeb3b';pts+=50}
+   else{fb.textContent='ERROU';fb.style.color='#f44336'}
+   $('pts').textContent=pts;
+  }
+  idx=i;best=0;$('nome').textContent=POSES[i].n;
+ }
+ drawAlvo(POSES[i],prog);
+ const r=lm.detectForVideo(v,now);
+ if(r.landmarks&&r.landmarks[0]){
+  const k=r.landmarks[0].map(p=>({x:1-p.x,y:p.y}));
+  const sc=score(k,POSES[i]);
+  if(prog>0.4)best=Math.max(best,sc);
+  cx.strokeStyle='#4caf50';cx.lineWidth=6;cx.lineCap='round';
+  for(const[a,b]of C){cx.beginPath();cx.moveTo(k[a].x*cv.width,k[a].y*cv.height);cx.lineTo(k[b].x*cv.width,k[b].y*cv.height);cx.stroke()}
+  cx.fillStyle='#fff';cx.font='bold 26px sans-serif';cx.fillText('Precisão: '+Math.round(sc)+'%',14,38);
+ }
+ requestAnimationFrame(loop);
+}
+
+$('start').onclick=async()=>{
+ const b=$('start');b.disabled=true;b.textContent='Carregando...';
+ try{
+  const fs=await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  lm=await PoseLandmarker.createFromOptions(fs,{baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",delegate:"GPU"},runningMode:"VIDEO",numPoses:1});
+  const st=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:480},height:{ideal:640}},audio:false});
+  v.srcObject=st;await v.play();
+  cv.width=v.videoWidth;cv.height=v.videoHeight;
+  b.style.display='none';start=performance.now();loop();
+ }catch(e){
+  $('err').textContent='Não consegui abrir a câmera: '+e.message+'. Verifique se deu permissão de câmera ao navegador.';
+  b.disabled=false;b.textContent='Tentar de novo';
+ }
+};
+</script></body></html>

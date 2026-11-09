@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AppDance - Câmera</title>
+<style>
+:root{--bg:#0f0d14;--panel:#1b1724;--panel2:#262033;--fg:#f4f1fa;--mut:#a59fb5;--pink:#ff2d7a;--cyan:#22d3ee;--yel:#facc15;--ok:#4ade80;--bad:#f87171}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,"Segoe UI",sans-serif}
+main{max-width:560px;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+h1{font-size:24px;margin:4px 0}
+h1 span{color:var(--pink)}
+h2{font-size:18px;margin:0}
+.card{background:var(--panel);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:10px}
+label{font-weight:700}
+input,select{font:inherit;font-size:20px;padding:10px 12px;border-radius:10px;border:2px solid #3a3248;background:#0f0d14;color:var(--fg);width:100%}
+#code{font-size:32px;letter-spacing:8px;text-align:center;font-weight:800}
+button,.filebtn{font:inherit;font-size:19px;font-weight:800;padding:13px 22px;border:0;border-radius:999px;background:var(--pink);color:#fff;cursor:pointer;text-align:center}
+button:disabled{opacity:.4}
+.sec{background:#3a3248!important}
+.small{font-size:16px;padding:10px 16px}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.row>*{flex:1 1 auto}
+.st{color:var(--mut);line-height:1.4}
+.st b{color:var(--ok)}
+#err,#why{color:var(--yel)}
+canvas{width:100%;border-radius:12px;background:#000}
+#people{display:flex;gap:8px;flex-wrap:wrap;min-height:30px}
+.chip{padding:4px 12px;border-radius:999px;font-weight:800;color:#000}
+.games{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.gbtn{background:var(--panel2);border-radius:12px;padding:10px;text-align:left;font-size:17px;font-weight:800;border:3px solid transparent;color:var(--fg)}
+.gbtn:first-child{grid-column:span 2}
+.gbtn small{display:block;font-weight:500;color:var(--mut);font-size:13px;margin-top:2px}
+.gbtn.sel{border-color:var(--pink);background:#33203a}
+.bar{height:10px;background:#2a2436;border-radius:5px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--cyan)}
+#dancebox{display:flex;flex-direction:column;gap:8px;border-top:1px solid #3a3248;padding-top:10px}
+.tip{font-size:14px;color:var(--mut)}
+.off{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+</style></head><body>
+<main>
+<h1>App<span>Dance</span> — Câmera</h1>
+
+<div class="card" id="s1">
+ <label for="code">Código que aparece no telão</label>
+ <input id="code" inputmode="numeric" maxlength="4" placeholder="0000" autocomplete="off">
+ <label for="camsel">Câmera</label>
+ <select id="camsel">
+  <option value="user">Frontal</option>
+  <option value="environment">Traseira (imagem melhor)</option>
+ </select>
+ <button id="con">Conectar</button>
+ <div class="st" id="st">Abra o telão no projetor ou no PC para ver o código.</div>
+ <div id="err"></div>
+</div>
+
+<div id="s2" hidden style="display:flex;flex-direction:column;gap:12px">
+ <div class="card">
+  <div class="st" id="st2">Conectado.</div>
+  <canvas id="cv" width="640" height="480"></canvas>
+  <div id="people"></div>
+ </div>
+ <div class="card">
+  <h2>Jogo</h2>
+  <div class="games" id="games"></div>
+  <div class="st" id="gdesc"></div>
+  <div id="dancebox">
+   <div class="st">Vídeo da dança:</div>
+   <div class="row"><button class="sec small" id="sample">Vídeo de exemplo</button><label class="filebtn sec small">Vídeo do celular<input type="file" id="file" accept="video/*" hidden></label></div>
+   <div class="bar"><i id="pfill"></i></div>
+   <div class="st" id="pstat">Escolha um vídeo. O celular prepara a dança e manda o vídeo para o telão.</div>
+  </div>
+  <div id="why"></div>
+  <div class="row"><button id="go">Começar</button><button class="sec" id="tomenu">Menu</button></div>
+ </div>
+ <div class="tip">Este celular é o cérebro do jogo: ele filma, calcula tudo e manda para o telão. Deixe ele parado (num tripé ou apoiado), a uns 2 a 3 metros, filmando todos os jogadores de corpo inteiro. Até 3 pessoas. Não bloqueie a tela durante o jogo.</div>
+</div>
+
+<video id="cam" class="off" playsinline muted></video>
+<video id="ref" class="off" playsinline muted preload="auto"></video>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script type="module">
+import {PoseLandmarker,FilesetResolver} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const WASM="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const MODEL="https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+const STEP=0.2,BEAT=1.0;
+const IDX=[0,11,12,13,14,15,16,19,20,23,24,25,26,27,28];   // pontos enviados ao telão
+const COLORS=['#ff2d7a','#22d3ee','#facc15'];
+const J={lSh:[23,11,13],rSh:[24,12,14],lEl:[11,13,15],rEl:[12,14,16],lHip:[11,23,25],rHip:[12,24,26],lKn:[23,25,27],rKn:[24,26,28]};
+const MIR={lSh:'rSh',rSh:'lSh',lEl:'rEl',rEl:'lEl',lHip:'rHip',rHip:'lHip',lKn:'rKn',rKn:'lKn'};
+const BONES=[[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28]];
+
+const $=id=>document.getElementById(id);
+const cam=$('cam'),cv=$('cv'),ref=$('ref');
+let peer=null,conn=null,lm=null,lmImg=null;
+let persons=[],feedSeq=0,trackedSeq=-1,feedAr=4/3,lastCamT=-1;
+const CH=1000;let FW=CH*4/3,FH=CH;                          // campo virtual do jogo
+let selGame='danca',game=null,state='lobby',slots=[];
+let coreo=null,coreoKey='',prepping=false,prepPct=0,telVideoReady=false;
+let sndQ=[],lastScene=0,lastLobby=0,lastT=performance.now();
+
+// ================= utilidades =================
+const q=v=>Math.round(v*1000)/1000;
+function vis(p){return !p?0:(p.visibility===undefined?1:p.visibility);}
+function scr(p){return [(1-p.x)*FW,p.y*FH];}               // espelhado
+function fmt(s){s=Math.max(0,Math.ceil(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0');}
+function headR(k){if(vis(k[11])>0.4&&vis(k[12])>0.4){const a=scr(k[11]),b=scr(k[12]);return Math.max(8,Math.hypot(a[0]-b[0],a[1]-b[1])*0.35);}return 14;}
+function pack(k){return IDX.map(i=>k[i]?[q(k[i].x),q(k[i].y),Math.round(vis(k[i])*100)/100]:null);}
+function send(m){if(conn&&conn.open)conn.send(m);}
+function ang(a,b,c){const r=Math.atan2(c.y-b.y,c.x-b.x)-Math.atan2(a.y-b.y,a.x-b.x);let d=Math.abs(r*180/Math.PI);return d>180?360-d:d;}
+function angles(k,W,H){
+ const o={};let n=0;
+ for(const [name,[a,b,c]] of Object.entries(J)){
+  if(Math.min(vis(k[a]),vis(k[b]),vis(k[c]))<0.5){o[name]=null;continue;}
+  const P=i=>({x:k[i].x*W,y:k[i].y*H});
+  o[name]=Math.round(ang(P(a),P(b),P(c)));n++;
+ }
+ return n>=3?o:null;
+}
+function compare(A,B,swap){
+ let s=0,n=0;
+ for(const name in J){const m=swap?MIR[name]:name;if(A[name]!=null&&B[m]!=null){s+=Math.abs(A[name]-B[m]);n++;}}
+ if(n<3)return 0;
+ return Math.max(0,100-(s/n)*1.5);
+}
+async function makeLm(mode,num){
+ const f=await FilesetResolver.forVisionTasks(WASM);
+ const o=d=>({baseOptions:{modelAssetPath:MODEL,delegate:d},runningMode:mode,numPoses:num});
+ try{return await PoseLandmarker.createFromOptions(f,o("GPU"));}
+ catch(e){return await PoseLandmarker.createFromOptions(f,o("CPU"));}
+}
+function centerX(k){let s=0,n=0;for(const i of [11,12,23,24])if(vis(k[i])>0.4){s+=k[i].x;n++;}return n?1-s/n:null;}
+function visiblePeople(){return persons.map(k=>({k,c:centerX(k)})).filter(o=>o.c!=null).sort((a,b)=>a.c-b.c);}
+function torso(k){
+ if(vis(k[11])<0.4||vis(k[12])<0.4||vis(k[23])<0.4||vis(k[24])<0.4)return 0;
+ const sx=(k[11].x+k[12].x)/2,sy=(k[11].y+k[12].y)/2,hx=(k[23].x+k[24].x)/2,hy=(k[23].y+k[24].y)/2;
+ return Math.hypot((sx-hx)*feedAr,sy-hy);
+}
+function bodyPoints(k){
+ const out=[],lw=CH*0.012;
+ for(const [a,b] of BONES){
+  if(vis(k[a])<0.4||vis(k[b])<0.4)continue;
+  const pa=scr(k[a]),pb=scr(k[b]);
+  for(const f of [0,0.5,1])out.push([pa[0]+(pb[0]-pa[0])*f,pa[1]+(pb[1]-pa[1])*f,lw]);
+ }
+ if(vis(k[0])>0.4){const p=scr(k[0]);out.push([p[0],p[1],headR(k)]);}
+ return out;
+}
+
+// Jogadores: cada vaga segue a pessoa mais próxima da sua posição (esquerda -> direita)
+function initSlots(n){
+ const vp=visiblePeople().slice(0,n);
+ slots=vp.map(o=>({x:o.c,k:o.k,seen:performance.now()}));
+ while(slots.length<n)slots.push({x:(slots.length+0.5)/n,k:null,seen:0});
+ trackedSeq=feedSeq;
+}
+function track(){
+ if(feedSeq===trackedSeq)return false;
+ trackedSeq=feedSeq;
+ const now=performance.now(),vp=visiblePeople(),used=new Set();
+ for(const s of slots){s.nk=null;let bi=-1,bd=0.3;vp.forEach((o,j)=>{if(used.has(j))return;const d=Math.abs(o.c-s.x);if(d<bd){bd=d;bi=j;}});if(bi>=0){used.add(bi);s.nk=vp[bi];}}
+ for(const s of slots){if(s.nk)continue;let bi=-1,bd=9;vp.forEach((o,j)=>{if(used.has(j))return;const d=Math.abs(o.c-s.x);if(d<bd){bd=d;bi=j;}});if(bi>=0){used.add(bi);s.nk=vp[bi];}}
+ for(const s of slots){if(s.nk){s.k=s.nk.k;s.x=s.nk.c;s.seen=now;}else if(now-s.seen>600)s.k=null;}
+ return true;
+}
+// esqueletos dos jogadores para o telão; o: (i)=>({g:cinza,b:piscando,x:marcaX})
+function plScene(o){return slots.map((s,i)=>Object.assign({k:s.k?pack(s.k):null,c:i},o?o(i):{}));}
+
+// ================= JOGOS (toda a lógica roda aqui no celular) =================
+const fbCol=t=>t==='PERFEITO!'?'#4ade80':t==='BOM'?'#facc15':'#f87171';
+
+const Danca={
+ id:'danca',nome:'Dança',curta:'Copie o dançarino do vídeo',
+ desc:'Copiem os movimentos do vídeo, espelhado. Cada jogador ganha nota a cada segundo: Perfeito, Bom ou Errou.',
+ start(n){this.n=n;this.p=Array.from({length:n},()=>({pts:0,bs:[],p:0,b:0,e:0,sum:0,cnt:0,fb:'',fbT:0}));this.bucket=-1;this.vrun=false;this.vt=0;this.vat=0;},
+ begin(){send({type:'vplay'});},
+ stop(){this.vrun=false;send({type:'vstop'});},
+ onT(t){this.vt=t;this.vat=performance.now();this.vrun=true;},
+ update(){
+  if(!this.vrun)return;
+  const t=this.vt+Math.min(1,(performance.now()-this.vat)/1000),refs=refAt(t);
+  if(refs.length)slots.forEach((s,i)=>{
+   let best=0;
+   if(s.k){const pa=angles(s.k,feedAr,1);if(pa)for(const R of refs){const v=Math.max(compare(pa,R,false),compare(pa,R,true));if(v>best)best=v;}}
+   this.p[i].bs.push(best);
+  });
+  const bk=Math.floor(t/BEAT);
+  if(bk!==this.bucket){if(this.bucket>=0)this.judge();this.bucket=bk;this.p.forEach(p=>p.bs=[]);}
+ },
+ judge(){
+  this.p.forEach(p=>{
+   if(!p.bs.length)return;
+   const avg=p.bs.reduce((a,b)=>a+b,0)/p.bs.length;p.sum+=avg;p.cnt++;
+   if(avg>=75){p.fb='PERFEITO!';p.pts+=100;p.p++;}else if(avg>=50){p.fb='BOM';p.pts+=50;p.b++;}else{p.fb='ERROU';p.e++;}
+   p.fbT=performance.now();p.bs=[];
+  });
+ },
+ scene(){
+  const p0=this.p[0],one=this.n===1&&p0.fb&&performance.now()-p0.fbT<900;
+  return{pl:plScene(),hud:{ch:this.p.map((p,i)=>({c:COLORS[i],t:'J'+(i+1)+': '+p.pts,s:p.fb,sc:fbCol(p.fb)})),r:''},
+   big:one?{t:p0.fb,c:fbCol(p0.fb),y:0.22,s:0.1}:null};
+ },
+ results(){return this.p.map((p,i)=>({i,score:p.pts,txt:p.pts+' pts · precisão '+(p.cnt?Math.round(p.sum/p.cnt):0)+'%'})).sort((a,b)=>b.score-a.score);}
+};
+
+const Baloes={
+ id:'baloes',nome:'Estoura Balões',curta:'Estoure com as mãos',
+ desc:'Estourem os balões com as mãos. Balão dourado vale 3 pontos, bomba preta tira 3. Partida de 60 segundos.',
+ start(n){this.n=n;this.t=0;this.dur=60;this.items=[];this.fx=[];this.sp=0.5;this.score=Array(n).fill(0);},
+ update(dt){
+  this.t+=dt;this.sp-=dt;
+  if(this.sp<=0){
+   this.sp=(0.8-Math.min(0.4,this.t/150))/(0.6+0.4*this.n);
+   const r=Math.random(),type=r<0.1?2:r<0.22?1:0,R=FH*0.055;   // 0 normal, 1 ouro, 2 bomba
+   this.items.push({x:R+Math.random()*(FW-2*R),y:FH+R,r:R,vy:FH*(0.16+Math.random()*0.1+this.t/500),type,ci:Math.floor(Math.random()*5),ph:Math.random()*6});
+  }
+  for(const it of this.items){it.y-=it.vy*dt;it.ph+=dt*2;it.cx=it.x+Math.sin(it.ph)*it.r*0.3;}
+  slots.forEach((s,i)=>{
+   if(!s.k)return;
+   for(const h of [15,16,19,20]){
+    if(vis(s.k[h])<0.3)continue;
+    const [hx,hy]=scr(s.k[h]);
+    for(const it of this.items){
+     if(it.dead)continue;
+     if(Math.hypot(hx-it.cx,hy-it.y)<it.r+CH*0.02){
+      it.dead=true;
+      const pts=it.type===1?3:it.type===2?-3:1;
+      this.score[i]+=pts;
+      this.fx.push({x:it.cx,y:it.y,txt:(pts>0?'+':'')+pts,col:pts<0?'#f87171':COLORS[i],life:0.9,r:it.r});
+      sndQ.push(pts<0?'bad':'pop');
+     }
+    }
+   }
+  });
+  this.items=this.items.filter(it=>!it.dead&&it.y>-it.r*3);
+  for(const f of this.fx){f.life-=dt;f.y-=CH*0.12*dt;}
+  this.fx=this.fx.filter(f=>f.life>0);
+  if(this.t>=this.dur)endGame();
+ },
+ scene(){
+  return{pl:plScene(),
+   ob:this.items.filter(it=>it.cx!==undefined).map(it=>[q(it.cx/FW),q(it.y/FH),q(it.r/FH),it.type,it.ci,q(it.vy/FH)]),
+   fx:this.fx.map(f=>[q(f.x/FW),q(f.y/FH),f.txt,f.col,q(f.life/0.9),q(f.r/FH)]),
+   hud:{ch:this.score.map((v,i)=>({c:COLORS[i],t:'J'+(i+1)+': '+v})),r:fmt(this.dur-this.t)}};
+ },
+ results(){return this.score.map((v,i)=>({i,score:v,txt:v+(Math.abs(v)===1?' ponto':' pontos')})).sort((a,b)=>b.score-a.score);}
+};
+
+const Corrida={
+ id:'corrida',nome:'Corrida Parada',curta:'Corra sem sair do lugar',
+ desc:'Corram no lugar levantando bem os joelhos, um de cada vez. Quem chegar primeiro a 50 passos vence. Todos precisam aparecer de corpo inteiro.',
+ start(n){this.n=n;this.goal=50;this.t=0;this.r=Array.from({length:n},()=>({steps:0,up:[false,false],fin:null}));},
+ onFeed(){
+  if(state!=='play')return;
+  slots.forEach((s,i)=>{
+   const R=this.r[i],k=s.k;
+   if(!k||R.fin!==null)return;
+   if(vis(k[11])<0.5||vis(k[12])<0.5||vis(k[23])<0.5||vis(k[24])<0.5)return;
+   const T=(k[23].y+k[24].y)/2-(k[11].y+k[12].y)/2;
+   if(T<=0.02)return;
+   [[23,25],[24,26]].forEach(([h,kn],j)=>{
+    if(vis(k[kn])<0.4)return;
+    const d=(k[kn].y-k[h].y)/T;
+    if(!R.up[j]&&d<0.55){R.up[j]=true;R.steps++;sndQ.push('step');if(R.steps>=this.goal)R.fin=this.t;}
+    else if(R.up[j]&&d>0.72)R.up[j]=false;
+   });
+  });
+ },
+ update(dt){this.t+=dt;if(this.r.every(R=>R.fin!==null)||this.t>=90)endGame();},
+ scene(){
+  return{pl:plScene(),ln:this.r.map(R=>[R.steps,R.fin===null?-1:q(R.fin)]),goal:this.goal,
+   hud:{ch:this.r.map((R,i)=>({c:COLORS[i],t:'J'+(i+1)+': '+R.steps})),r:fmt(this.t)},
+   big:this.t<4?{t:'LEVANTE OS JOELHOS!',c:'#fff',y:0.85,s:0.07}:null};
+ },
+ results(){return this.r.map((R,i)=>({i,score:R.fin!==null?100000-R.fin:R.steps,txt:R.fin!==null?'Chegou em '+R.fin.toFixed(1)+' s':R.steps+' passos'})).sort((a,b)=>b.score-a.score);}
+};
+
+const Estatua={
+ id:'estatua',nome:'Estátua',curta:'Dance e congele',
+ desc:'Dancem enquanto a música toca. Quando aparecer ESTÁTUA, congelem! Quem se mexer sai. Ganha quem ficar por último (sozinho: aguente 10 rodadas).',
+ TH:0.8,GRACE:0.7,
+ start(n){this.n=n;this.round=0;this.alive=Array(n).fill(true);this.outR=Array(n).fill(null);this.m=Array(n).fill(0);this.prev=Array(n).fill(null);this.prevT=performance.now();this.phase='espera';this.pt=0;this.ft=0;},
+ begin(){this.nextDance();},
+ nextDance(){this.round++;this.phase='danca';this.pt=3+Math.random()*4;},
+ onFeed(){
+  const now=performance.now(),dtf=Math.max(0.02,Math.min(0.3,(now-this.prevT)/1000));this.prevT=now;
+  slots.forEach((s,i)=>{
+   const k=s.k;if(!k){this.prev[i]=null;return;}
+   const p=this.prev[i],T=torso(k);
+   if(p&&T){
+    let sum=0,c=0;
+    for(const j of [0,11,12,13,14,15,16,23,24,25,26])if(vis(k[j])>0.5&&vis(p[j])>0.5){sum+=Math.hypot((k[j].x-p[j].x)*feedAr,k[j].y-p[j].y);c++;}
+    if(c>=4)this.m[i]=this.m[i]*0.6+(sum/c/T/dtf)*0.4;
+   }
+   this.prev[i]=k;
+  });
+ },
+ update(dt){
+  this.pt-=dt;
+  if(this.phase==='danca'){
+   if(this.pt<=0){this.phase='congela';this.pt=3;this.ft=0;sndQ.push('beep');}
+  }else if(this.phase==='congela'){
+   this.ft+=dt;
+   if(this.ft>this.GRACE)this.alive.forEach((a,i)=>{if(a&&slots[i].k&&this.m[i]>this.TH){this.alive[i]=false;this.outR[i]=this.round;sndQ.push('bad');}});
+   if(this.pt<=0){
+    const vivos=this.alive.filter(Boolean).length;
+    if((this.n>1&&vivos<=1)||vivos===0||this.round>=10)endGame();else this.nextDance();
+   }
+  }
+ },
+ scene(){
+  return{pl:plScene(i=>({g:this.alive[i]?0:1,x:this.alive[i]?0:1})),
+   ph:this.phase,pf:q(Math.max(0,this.pt/3)),mu:this.phase==='danca'?1:0,
+   me:this.m.map(v=>q(Math.min(1,v/(this.TH*1.5)))),ov:this.m.map(v=>v>this.TH?1:0),
+   hud:{ch:this.alive.map((a,i)=>({c:a?COLORS[i]:'#666',t:'J'+(i+1)+(a?'':' FORA')})),r:'Rodada '+this.round},
+   big:this.phase==='danca'?{t:'DANCE!',c:'#4ade80',y:0.2,s:0.12}:this.phase==='congela'?{t:'ESTÁTUA!',c:'#22d3ee',y:0.2,s:0.14}:null};
+ },
+ results(){return this.alive.map((a,i)=>({i,score:a?100:this.outR[i],txt:a?(this.n===1?'Aguentou as '+this.round+' rodadas!':'Ficou até o fim!'):'Saiu na rodada '+this.outR[i]})).sort((a,b)=>b.score-a.score);}
+};
+
+const Desvia={
+ id:'desvia',nome:'Desvia!',curta:'Fuja das bolas de fogo',
+ desc:'Bolas de fogo caem do céu e cruzam a tela. Desviem com o corpo todo! Cada jogador tem 3 vidas. Partida de 60 segundos.',
+ start(n){this.n=n;this.t=0;this.dur=60;this.balls=[];this.fx=[];this.sp=1.5;this.pl=Array.from({length:n},()=>({vidas:3,inv:0,morto:null}));},
+ update(dt){
+  this.t+=dt;this.sp-=dt;
+  const lvl=Math.min(1,this.t/this.dur);
+  if(this.sp<=0){
+   this.sp=(1.2-lvl*0.65)/(0.7+0.3*this.n);
+   const R=FH*(0.035+Math.random()*0.02);
+   if(Math.random()<0.7)this.balls.push({x:Math.random()*FW,y:-R,vx:(Math.random()-0.5)*FW*0.12,vy:FH*(0.3+lvl*0.4+Math.random()*0.15),r:R});
+   else{const left=Math.random()<0.5;this.balls.push({x:left?-R:FW+R,y:FH*(0.15+Math.random()*0.55),vx:(left?1:-1)*FW*(0.25+lvl*0.3),vy:0,r:R});}
+  }
+  for(const b of this.balls){b.x+=b.vx*dt;b.y+=b.vy*dt;}
+  this.pl.forEach(p=>{if(p.inv>0)p.inv-=dt;});
+  slots.forEach((s,i)=>{
+   const P=this.pl[i];
+   if(!s.k||P.morto!==null||P.inv>0)return;
+   const pts=bodyPoints(s.k);
+   for(const b of this.balls){
+    if(b.dead)continue;
+    if(pts.some(([px,py,pr])=>Math.hypot(px-b.x,py-b.y)<b.r+pr)){
+     b.dead=true;P.vidas--;P.inv=1.5;this.fx.push({x:b.x,y:b.y,life:0.6,col:COLORS[i]});sndQ.push('hit');
+     if(P.vidas<=0)P.morto=this.t;
+     break;
+    }
+   }
+  });
+  this.balls=this.balls.filter(b=>!b.dead&&b.y<FH+b.r*2&&b.x>-b.r*3&&b.x<FW+b.r*3);
+  for(const f of this.fx)f.life-=dt;
+  this.fx=this.fx.filter(f=>f.life>0);
+  if(this.t>=this.dur||this.pl.every(p=>p.morto!==null))endGame();
+ },
+ scene(){
+  return{pl:plScene(i=>{const P=this.pl[i];return{g:P.morto!==null?1:0,b:(P.inv>0&&Math.floor(P.inv*8)%2===0)?1:0};}),
+   bl:this.balls.map(b=>[q(b.x/FW),q(b.y/FH),q(b.r/FH),q(b.vx/FW),q(b.vy/FH)]),
+   fx:this.fx.map(f=>[q(f.x/FW),q(f.y/FH),q(f.life/0.6),f.col]),
+   hud:{ch:this.pl.map((p,i)=>({c:p.morto!==null?'#666':COLORS[i],t:'J'+(i+1),s:p.morto!==null?'FORA':'❤'.repeat(p.vidas),sc:'#f87171'})),r:fmt(this.dur-this.t)}};
+ },
+ results(){return this.pl.map((p,i)=>({i,score:p.morto===null?1000+p.vidas:p.morto,txt:p.morto===null?'Sobreviveu com '+p.vidas+(p.vidas>1?' vidas':' vida'):'Durou '+p.morto.toFixed(1)+' s'})).sort((a,b)=>b.score-a.score);}
+};
+
+const GAMES={danca:Danca,baloes:Baloes,corrida:Corrida,estatua:Estatua,desvia:Desvia};
+const ORDER=['danca','baloes','corrida','estatua','desvia'];
+
+// ================= vídeo da dança (preparado aqui no celular) =================
+function setPrep(p,txt){prepPct=p;$('pfill').style.width=p+'%';$('pstat').textContent=txt;}
+function seekRef(t){return new Promise(r=>{const h=()=>{ref.removeEventListener('seeked',h);r();};ref.addEventListener('seeked',h);ref.currentTime=t;});}
+async function selectVideo(src,name,file){
+ if(prepping)return;
+ coreo=null;telVideoReady=false;
+ coreoKey='coreo:'+(file?file.name+':'+file.size:src)+':v3';
+ if(file){
+  if(file.size>60e6){setPrep(0,'Vídeo muito grande (máximo 60 MB). Escolha um vídeo menor.');return;}
+  setPrep(0,'Enviando o vídeo para o telão...');
+  send({type:'videofile',name:file.name,mime:file.type||'video/mp4',data:await file.arrayBuffer()});
+ }else send({type:'video',src});
+ try{const s=localStorage.getItem(coreoKey);if(s)coreo=JSON.parse(s);}catch(_){}
+ if(coreo){setPrep(100,name+' pronto!');return;}
+ prepping=true;setPrep(0,'Preparando '+name+'...');
+ try{
+  if(!lmImg)lmImg=await makeLm('IMAGE',1);
+  ref.src=file?URL.createObjectURL(file):src;
+  await new Promise((r,j)=>{ref.addEventListener('loadedmetadata',r,{once:true});ref.addEventListener('error',()=>j(new Error('não consegui abrir o vídeo')),{once:true});});
+  const dur=ref.duration,W=ref.videoWidth,H=ref.videoHeight,out=[];let found=0;
+  for(let t=0;t<dur;t+=STEP){
+   await seekRef(t);
+   const r=lmImg.detect(ref);
+   const k=r.landmarks&&r.landmarks[0];
+   const a=k?angles(k,W,H):null;
+   if(a)found++;
+   out.push({t:+t.toFixed(2),a});
+   const p=Math.min(99,Math.round(t/dur*100));
+   setPrep(p,'Preparando '+name+': '+p+'%');
+  }
+  if(found<5)throw new Error('não encontrei o dançarino no vídeo. Use um vídeo com a pessoa de corpo inteiro.');
+  coreo=out;
+  try{localStorage.setItem(coreoKey,JSON.stringify(out));}catch(_){}
+  setPrep(100,name+' pronto!');
+ }catch(e){setPrep(0,'Erro: '+e.message);}
+ prepping=false;
+}
+function refAt(t){
+ const out=[];
+ const i0=Math.max(0,Math.floor((t-0.5)/STEP)),i1=Math.min(coreo.length-1,Math.ceil((t+0.1)/STEP));
+ for(let i=i0;i<=i1;i++)if(coreo[i]&&coreo[i].a)out.push(coreo[i].a);
+ return out;
+}
+$('sample').onclick=()=>selectVideo('danca-exemplo.mp4','Vídeo de exemplo',null);
+$('file').onchange=e=>{const f=e.target.files[0];if(f)selectVideo(null,f.name,f);};
+
+// ================= menu, início e fim =================
+function buildMenu(){
+ const g=$('games');g.innerHTML='';
+ ORDER.forEach(id=>{
+  const G=GAMES[id],b=document.createElement('button');
+  b.className='gbtn';b.dataset.id=id;b.innerHTML=G.nome+'<small>'+G.curta+'</small>';
+  b.onclick=()=>selectGame(id);g.appendChild(b);
+ });
+}
+function selectGame(id){
+ if(!GAMES[id]||state==='play'||state==='count')return;
+ selGame=id;
+ document.querySelectorAll('.gbtn').forEach(b=>b.classList.toggle('sel',b.dataset.id===id));
+ $('gdesc').textContent=GAMES[id].desc+' De 1 a 3 jogadores.';
+ $('dancebox').hidden=id!=='danca';
+ lastLobby=0;
+}
+function whyNot(){
+ if(!visiblePeople().length)return 'Não estou vendo ninguém. Afastem-se até aparecer de corpo inteiro.';
+ if(selGame==='danca'){
+  if(prepping)return 'Preparando o vídeo da dança...';
+  if(!coreo)return 'Escolha o vídeo da dança.';
+  if(!telVideoReady)return 'O telão está carregando o vídeo...';
+ }
+ return '';
+}
+function startGame(){
+ if(state==='play'||state==='count')return;
+ const w=whyNot();
+ if(w){if(state==='res')toLobby();$('why').textContent=w;return;}
+ const n=Math.min(3,visiblePeople().length);
+ initSlots(n);
+ game=GAMES[selGame];game.start(n);
+ state='count';
+ let c=3;send({type:'count',c,n,nome:game.nome});
+ $('st2').innerHTML='<b>'+game.nome+'</b> começando! Olhem para o telão.';
+ const iv=setInterval(()=>{
+  c--;
+  if(state!=='count'){clearInterval(iv);return;}
+  if(c>0){send({type:'count',c,n,nome:game.nome});return;}
+  clearInterval(iv);send({type:'count',c:0});
+  state='play';lastT=performance.now();if(game.begin)game.begin();
+  $('st2').innerHTML='Jogando <b>'+game.nome+'</b>. Olhem para o telão.';
+ },1000);
+}
+function endGame(){
+ if(state!=='play')return;
+ state='res';
+ if(game.stop)game.stop();
+ const r=game.results(),tie=game.n>1&&r.length>1&&r[0].score===r[1].score;
+ send({type:'res',title:'Fim: '+game.nome,winner:game.n===1?r[0].txt:(tie?'Empate!':'Jogador '+(r[0].i+1)+' venceu!'),wc:tie?-1:r[0].i,rank:r.map(x=>({i:x.i,txt:x.txt}))});
+ $('st2').innerHTML='Fim de jogo! Veja o resultado no telão. Aperte Começar para jogar de novo.';
+}
+function toLobby(){
+ if(game&&game.stop&&(state==='play'||state==='count'))game.stop();
+ state='lobby';send({type:'menu'});lastLobby=0;
+ $('st2').innerHTML='<b>Menu.</b> Escolha o jogo aqui ou no telão.';
+}
+function sendLobby(){
+ const vp=visiblePeople().slice(0,3),w=whyNot();
+ send({type:'lobby',sel:selGame,why:w,dance:{t:$('pstat').textContent,p:prepPct},ar:feedAr,ps:vp.map(o=>pack(o.k))});
+ $('why').textContent=w;$('go').disabled=!!w;
+}
+
+// ================= conexão com o telão =================
+$('code').value=(location.hash||'').replace('#','').slice(0,4);
+function st(t){$('st').textContent=t;}
+$('con').onclick=async()=>{
+ $('err').textContent='';
+ const code=$('code').value.trim();
+ if(!/^\d{4}$/.test(code)){$('err').textContent='Digite o código de 4 números que aparece no telão.';return;}
+ $('con').disabled=true;
+ try{
+  st('Ligando a câmera...');
+  const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:$('camsel').value,width:{ideal:640},height:{ideal:480}},audio:false});
+  cam.srcObject=stream;await cam.play();
+  feedAr=cam.videoWidth/cam.videoHeight;FW=CH*feedAr;
+  st('Carregando o detector de poses...');
+  if(!lm)lm=await makeLm('VIDEO',3);
+  st('Conectando ao telão...');
+  await connect(code);
+  cv.width=cam.videoWidth;cv.height=cam.videoHeight;
+  $('s1').hidden=true;$('s2').hidden=false;
+  $('st2').innerHTML='<b>Conectado ao telão!</b> Escolha o jogo aqui ou no telão.';
+  buildMenu();selectGame('danca');
+  keepAwake();
+  requestAnimationFrame(loop);
+ }catch(e){
+  $('err').textContent='Erro: '+e.message;st('');
+  $('con').disabled=false;
+ }
+};
+function connect(code){
+ return new Promise((res,rej)=>{
+  let done=false;
+  const fail=msg=>{if(done)return;done=true;rej(new Error(msg));};
+  const to=setTimeout(()=>fail('não achei o telão com esse código. Confira o código e se o telão está aberto.'),15000);
+  peer=new Peer();
+  peer.on('open',()=>{
+   conn=peer.connect('jdanca-'+code,{reliable:true});
+   conn.on('open',()=>{if(done)return;done=true;clearTimeout(to);res();});
+   conn.on('data',onMsg);
+   conn.on('close',()=>{if(state==='play'||state==='count'){state='lobby';}$('st2').textContent='O telão desconectou. Recarregue esta página para conectar de novo.';$('go').disabled=true;});
+  });
+  peer.on('error',e=>{clearTimeout(to);fail(e.type==='peer-unavailable'?'não achei o telão com esse código. Confira o código.':'a conexão falhou ('+e.type+'). Verifique a internet.');});
+ });
+}
+function onMsg(m){
+ if(!m||!m.type)return;
+ if(m.type==='busy')$('st2').textContent='Esse telão já tem outro celular conectado.';
+ else if(m.type==='select')selectGame(m.id);
+ else if(m.type==='start'){if(state==='lobby'||state==='res')startGame();}
+ else if(m.type==='menu')toLobby();
+ else if(m.type==='sample')selectVideo('danca-exemplo.mp4','Vídeo de exemplo',null);
+ else if(m.type==='t'){if(state==='play'&&game===Danca)Danca.onT(m.t);}
+ else if(m.type==='vended'){if(state==='play'&&game===Danca){Danca.judge();endGame();}}
+ else if(m.type==='vready')telVideoReady=true;
+ else if(m.type==='verr'){telVideoReady=false;setPrep(prepPct,'O telão não conseguiu abrir esse vídeo. Tente outro.');}
+}
+
+// ================= laço principal =================
+function loop(){
+ const now=performance.now(),dt=Math.min(0.1,(now-lastT)/1000);lastT=now;
+ const cx=cv.getContext('2d'),W=cv.width,H=cv.height;
+ cx.save();cx.scale(-1,1);cx.drawImage(cam,-W,0,W,H);cx.restore();
+ if(cam.currentTime!==lastCamT){
+  lastCamT=cam.currentTime;
+  const r=lm.detectForVideo(cam,now);
+  persons=r.landmarks||[];feedSeq++;
+ }
+ const playing=state==='play'||state==='count';
+ if(playing&&game){
+  if(track()&&game.onFeed)game.onFeed();
+  if(state==='play')game.update(dt);
+ }
+ // prévia no celular
+ const list=playing?slots.map(s=>s.k):visiblePeople().slice(0,3).map(o=>o.k);
+ list.forEach((k,i)=>{
+  if(!k)return;
+  cx.strokeStyle=COLORS[i];cx.lineWidth=Math.max(3,W/110);cx.lineCap='round';
+  for(const [a,b] of BONES){if(vis(k[a])<0.4||vis(k[b])<0.4)continue;cx.beginPath();cx.moveTo((1-k[a].x)*W,k[a].y*H);cx.lineTo((1-k[b].x)*W,k[b].y*H);cx.stroke();}
+ });
+ if(playing&&game&&now-lastScene>40){
+  lastScene=now;
+  send(Object.assign({type:'scene',g:game.id,ar:q(feedAr),snd:sndQ.splice(0)},game.scene()));
+ }
+ if(!playing&&now-lastLobby>200){
+  lastLobby=now;
+  if(state==='lobby')sendLobby();
+  const vp=visiblePeople();
+  $('people').innerHTML=vp.length?vp.slice(0,3).map((o,i)=>'<span class="chip" style="background:'+COLORS[i]+'">Jogador '+(i+1)+'</span>').join(''):'<span class="st">Não estou vendo ninguém.</span>';
+  if(state==='res'){$('go').disabled=false;$('why').textContent='';}
+ }
+ requestAnimationFrame(loop);
+}
+
+$('go').onclick=startGame;
+$('tomenu').onclick=toLobby;
+
+let wl=null;
+async function keepAwake(){try{if('wakeLock' in navigator)wl=await navigator.wakeLock.request('screen');}catch(_){}}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')keepAwake();});
+</script>
+</body></html>
