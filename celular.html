@@ -144,11 +144,54 @@ function compare(A,B,swap){
  if(n<3)return 0;
  return Math.max(0,100-(s/n)*1.5);
 }
-async function makeLm(mode,num){
- const f=await FilesetResolver.forVisionTasks(WASM);
+let fileset=null;
+async function makeLm(mode,num,only){
+ if(!fileset)fileset=await FilesetResolver.forVisionTasks(WASM);
  const o=d=>({baseOptions:{modelAssetPath:MODEL,delegate:d},runningMode:mode,numPoses:num});
- try{const r=await PoseLandmarker.createFromOptions(f,o("GPU"));if(mode==='VIDEO')gpuOn=true;return r;}
- catch(e){if(mode==='VIDEO')gpuOn=false;return await PoseLandmarker.createFromOptions(f,o("CPU"));}
+ if(only)return await PoseLandmarker.createFromOptions(fileset,o(only));
+ try{const r=await PoseLandmarker.createFromOptions(fileset,o("GPU"));if(mode==='VIDEO')gpuOn=true;return r;}
+ catch(e){if(mode==='VIDEO')gpuOn=false;return await PoseLandmarker.createFromOptions(fileset,o("CPU"));}
+}
+// Testa GPU e CPU com a câmera de verdade e fica com o mais rápido (em muitos Android a CPU ganha)
+async function pickFastest(){
+ let saved=null;try{saved=localStorage.getItem('appdance-delegate');}catch(_){}
+ const bench=async(d)=>{
+  const l=await makeLm('VIDEO',1,d);let t=0,n=0,ts=performance.now();
+  for(let i=0;i<14;i++){
+   await new Promise(r=>requestAnimationFrame(r));
+   ts=Math.max(performance.now(),ts+1);const a=performance.now();l.detectForVideo(cam,ts);const b=performance.now();
+   if(i>=4){t+=b-a;n++;}
+  }
+  return {l,ms:t/n};
+ };
+ if(saved==='GPU'||saved==='CPU'){
+  try{const l=await makeLm('VIDEO',3,saved);gpuOn=saved==='GPU';return l;}catch(_){}
+ }
+ let g=null,c=null;
+ try{g=await bench('GPU');}catch(_){}
+ try{c=await bench('CPU');}catch(_){}
+ let best;
+ if(g&&(!c||g.ms<=c.ms)){best='GPU';if(c)c.l.close();g.l.close();}
+ else{best='CPU';if(g)g.l.close();c.l.close();}
+ try{localStorage.setItem('appdance-delegate',best);}catch(_){}
+ gpuOn=best==='GPU';
+ return await makeLm('VIDEO',3,best);
+}
+// Filtro "One Euro": segura o tremido quando parado, responde rápido quando mexe
+class OneEuro{
+ constructor(minCut,beta){this.minCut=minCut;this.beta=beta;this.x=null;this.dx=0;this.t=0;}
+ a(cut,dt){const tau=1/(2*Math.PI*cut);return 1/(1+tau/dt);}
+ f(v,t){
+  if(this.x===null){this.x=v;this.t=t;return v;}
+  const dt=Math.max(0.005,(t-this.t)/1000);this.t=t;
+  const ad=this.a(1.0,dt);this.dx=ad*((v-this.x)/dt)+(1-ad)*this.dx;
+  const al=this.a(this.minCut+this.beta*Math.abs(this.dx),dt);
+  this.x=al*v+(1-al)*this.x;return this.x;
+ }
+}
+function smoothK(s,raw,t){
+ if(!s.flt)s.flt=raw.map(()=>({x:new OneEuro(0.9,9),y:new OneEuro(0.9,9)}));
+ return raw.map((p,i)=>p?{x:s.flt[i].x.f(p.x,t),y:s.flt[i].y.f(p.y,t),visibility:p.visibility}:p);
 }
 // ---- detecção: roda assim que a câmera entrega cada imagem nova ----
 let detMs=20,pipeLat=60,gpuOn=true,frameTs=0,useRVFC=false,curPoses=3,lastDetTs=0;
@@ -208,7 +251,10 @@ function track(){
  const now=performance.now(),vp=visiblePeople(),used=new Set();
  for(const s of slots){s.nk=null;let bi=-1,bd=0.3;vp.forEach((o,j)=>{if(used.has(j))return;const d=Math.abs(o.c-s.x);if(d<bd){bd=d;bi=j;}});if(bi>=0){used.add(bi);s.nk=vp[bi];}}
  for(const s of slots){if(s.nk)continue;let bi=-1,bd=9;vp.forEach((o,j)=>{if(used.has(j))return;const d=Math.abs(o.c-s.x);if(d<bd){bd=d;bi=j;}});if(bi>=0){used.add(bi);s.nk=vp[bi];}}
- for(const s of slots){if(s.nk){s.k=s.nk.k;s.x=s.nk.c;s.seen=now;}else if(now-s.seen>600)s.k=null;}
+ for(const s of slots){
+  if(s.nk){s.k=smoothK(s,s.nk.k,frameTs||now);s.x=s.nk.c;s.seen=now;}
+  else if(now-s.seen>600){s.k=null;s.flt=null;}                 // perdeu a pessoa: zera o filtro
+ }
  return true;
 }
 // esqueletos dos jogadores para o telão; o: (i)=>({g:cinza,b:piscando,x:marcaX})
@@ -309,8 +355,8 @@ const Corrida={
    [[23,25],[24,26]].forEach(([h,kn],j)=>{
     if(vis(k[kn])<0.4)return;
     const d=(k[kn].y-k[h].y)/T;
-    if(!R.up[j]&&d<0.55){R.up[j]=true;R.steps++;sndQ.push('step');if(R.steps>=this.goal)R.fin=this.t;}
-    else if(R.up[j]&&d>0.72)R.up[j]=false;
+    if(!R.up[j]&&d<0.5){R.up[j]=true;R.steps++;sndQ.push('step');if(R.steps>=this.goal)R.fin=this.t;}
+    else if(R.up[j]&&d>0.64)R.up[j]=false;
    });
   });
  },
@@ -337,7 +383,10 @@ const Estatua={
    const p=this.prev[i],T=torso(k);
    if(p&&T){
     let sum=0,c=0;
-    for(const j of [0,11,12,13,14,15,16,23,24,25,26])if(vis(k[j])>0.5&&vis(p[j])>0.5){sum+=Math.hypot((k[j].x-p[j].x)*feedAr,k[j].y-p[j].y);c++;}
+    for(const j of [0,11,12,13,14,15,16,23,24,25,26]){
+     const need=(j===15||j===16)?0.8:0.6;                       // mãos só contam se bem visíveis (tremem mais)
+     if(vis(k[j])>need&&vis(p[j])>need){sum+=Math.hypot((k[j].x-p[j].x)*feedAr,k[j].y-p[j].y);c++;}
+    }
     if(c>=4)this.m[i]=this.m[i]*0.6+(sum/c/T/dtf)*0.4;
    }
    this.prev[i]=k;
@@ -535,8 +584,8 @@ $('con').onclick=async()=>{
   const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:$('camsel').value,width:{ideal:480},height:{ideal:360},frameRate:{ideal:30}},audio:false});
   cam.srcObject=stream;await cam.play();
   feedAr=cam.videoWidth/cam.videoHeight;FW=CH*feedAr;
-  st('Carregando o detector de poses...');
-  if(!lm)lm=await makeLm('VIDEO',3);
+  st('Testando o processador do celular (só na primeira vez)...');
+  if(!lm)lm=await pickFastest();
   st('Conectando ao telão...');
   await connect(code);
   cv.width=cam.videoWidth;cv.height=cam.videoHeight;

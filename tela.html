@@ -283,12 +283,15 @@ function storePlayers(m,now){
 function kNow(c,now){
  const h=hist[c];if(!h||!h.ck)return null;
  if(!lagMode||!h.v)return h.ck;
- // quanto prever: atraso câmera+detecção + metade da ida e volta da rede + tempo desde que o pacote chegou
- const ahead=Math.min(140,pipeLat*0.7+rtt/2+(now-h.ct));
+ // quanto prever: parte do atraso câmera+rede, com limite (prever demais faz tremer)
+ const ahead=Math.min(90,(pipeLat*0.5+rtt/2)*0.6+(now-h.ct)*0.8);
  return h.ck.map((p,i)=>{
   const v=h.v[i];if(!p||!v)return p;
-  let dx=v.x*ahead,dy=v.y*ahead;
-  const m=Math.hypot(dx,dy);if(m>0.08){dx*=0.08/m;dy*=0.08/m;}   // limita para não "passar do ponto"
+  const sp=Math.hypot(v.x,v.y);
+  if(sp<0.0002)return p;                                    // parado (ou tremidinha): não prevê nada
+  const k=Math.min(1,(sp-0.0002)/0.0006);                   // entra suave conforme a velocidade
+  let dx=v.x*ahead*k,dy=v.y*ahead*k;
+  const m=Math.hypot(dx,dy);if(m>0.06){dx*=0.06/m;dy*=0.06/m;}   // limita para não "passar do ponto"
   return{x:p.x+dx,y:p.y+dy,v:p.v};
  });
 }
@@ -533,10 +536,10 @@ function showLobby(m){
  if(m.ch){chars=m.ch.slice(0,3);renderPicks();}
  if(m.dg){
   pipeLat=m.dg.lt||pipeLat;
-  const slow=m.dg.det>45||!m.dg.gpu;
-  $('diag').innerHTML='Conexão '+(connKind||'...')+' · rede '+Math.round(rtt/2)+' ms · câmera '+(m.dg.lt||'?')+' ms ('+(m.dg.gpu?'GPU':'<b style="color:var(--yel)">sem GPU</b>')+', '+m.dg.det+' ms por imagem)'+
-   (connKind&&connKind!=='direta pelo Wi-Fi'?'<br><b style="color:var(--yel)">Dica: coloque o celular e o telão no mesmo Wi-Fi para menos atraso.</b>':'')+
-   (slow?'<br><b style="color:var(--yel)">O celular está analisando devagar. Feche outros apps e use o Chrome atualizado.</b>':'');
+  const slow=m.dg.det>60;
+  $('diag').innerHTML='Conexão '+(connKind||'...')+' · rede '+Math.round(rtt/2)+' ms · câmera '+(m.dg.lt||'?')+' ms ('+(m.dg.gpu?'GPU':'CPU')+', '+m.dg.det+' ms por imagem)'+
+   (connKind&&connKind!=='direta pelo Wi-Fi'?'<br><b style="color:var(--yel)">Dica: coloque o celular no mesmo Wi-Fi do telão e desligue os dados móveis.</b>':'')+
+   (slow?'<br><b style="color:var(--yel)">No menu o celular procura até 3 pessoas e fica mais lento; no jogo ele procura só os jogadores. Feche outros apps.</b>':'');
  }
  markGame(m.sel);
  $('gohint').textContent=m.why||'';$('go').disabled=!!m.why;
