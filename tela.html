@@ -8,7 +8,7 @@
 [hidden]{display:none!important}
 html,body{margin:0;height:100%;background:#000;color:var(--fg);font-family:system-ui,"Segoe UI",sans-serif;overflow:hidden}
 #vid{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;visibility:hidden}
-#gc{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+#gc,#bgc,#g3d{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 .ov{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.4vh;background:#0b0910f5;text-align:center;padding:2vh 2vw;overflow:auto}
 h1{font-size:5vh;margin:0}
 h1 span{color:var(--pink)}
@@ -52,6 +52,8 @@ button.small{font-size:1.8vh;padding:.9vh 1.8vh}
 #winner{font-size:6vh;font-weight:900}
 </style></head><body>
 <video id="vid" playsinline preload="auto"></video>
+<canvas id="bgc"></canvas>
+<canvas id="g3d"></canvas>
 <canvas id="gc"></canvas>
 
 <div class="ov" id="lobby">
@@ -99,6 +101,8 @@ button.small{font-size:1.8vh;padding:.9vh 1.8vh}
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="personagens.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.min.js"></script>
+<script src="char3d.js"></script>
 <script>
 // O telão só MOSTRA: recebe do celular o que desenhar, toca o vídeo e os sons.
 const SITE_ONLINE="https://appdance.netlify.app/"; // usado quando o telão é aberto direto do PC (arquivo)
@@ -126,13 +130,16 @@ const $=id=>document.getElementById(id);
 const vid=$('vid'),gc=$('gc'),ctx=gc.getContext('2d');
 let peer=null,conn=null,fast=null,code='',tstate='wait';   // wait | lobby | count | play | res
 let scene=null,sceneAt=0,lastSeq=0,feedAr=4/3,tick=null,chars=['urso','cachorro','coelho'];
-let CW=0,CH=0,FX=0,FY=0,FW=0,FH=0,rscale=1;
+let CW=0,CH=0,FX=0,FY=0,FW=0,FH=0,rscale=1,bgKey='',use3D=false,was3D=false;
 const hist={};      // histórico de cada jogador, para prever o movimento entre pacotes
 const bgCache={};
 
 // ================= tela =================
-function resize(){CW=gc.width=Math.round(innerWidth*rscale);CH=gc.height=Math.round(innerHeight*rscale);fit();for(const k in bgCache)delete bgCache[k];}
+function resize(){CW=gc.width=Math.round(innerWidth*rscale);CH=gc.height=Math.round(innerHeight*rscale);fit();for(const k in bgCache)delete bgCache[k];
+ const b=document.getElementById('bgc');if(b){b.width=CW;b.height=CH;bgKey='';}
+ if(use3D&&window.Fofo3D)Fofo3D.resize(CW,CH);}
 function fit(){FW=CW;FH=FW/feedAr;if(FH>CH){FH=CH;FW=FH*feedAr;}FX=(CW-FW)/2;FY=(CH-FH)/2;}
+use3D=!/[?&]2d/.test(location.search)&&!!(window.Fofo3D&&Fofo3D.init(document.getElementById('g3d')));
 addEventListener('resize',resize);resize();
 function unpack(arr){if(!arr)return null;const k=new Array(33).fill(null);IDX.forEach((idx,j)=>{const a=arr[j];if(a)k[idx]={x:a[0],y:a[1],v:a[2]};});return k;}
 function vis(p){return p?p.v:0;}
@@ -385,22 +392,54 @@ document.addEventListener('keydown',()=>snd.ctx());
 function playersNow(now){
  return Object.keys(hist).map(c=>({c:+c,k:kNow(+c,now),g:hist[c].g,b:hist[c].b,x:hist[c].x}));
 }
+// fundo fica numa camada própria e só é redesenhado quando muda
+function setBg(key,draw){
+ const k=key+':'+CW+'x'+CH;if(k===bgKey)return;bgKey=k;
+ const b=document.getElementById('bgc').getContext('2d');draw(b);
+}
+function clearBg(){if(!bgKey)return;bgKey='';const c=document.getElementById('bgc');c.getContext('2d').clearRect(0,0,c.width,c.height);}
+function pill(x,y,label,col,R){
+ const s=Math.max(13,R*0.36);
+ ctx.font='800 '+s+'px "Baloo 2",system-ui,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+ const w=ctx.measureText(label).width+s*0.9;
+ ctx.fillStyle=col;rr(ctx,x-w/2,y-s*0.68,w,s*1.36,s*0.68);ctx.fill();
+ ctx.fillStyle='#14102a';ctx.fillText(label,x,y);
+}
+function xMark(x,y,r){ctx.strokeStyle='#f87171';ctx.lineWidth=10;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(x-r,y-r);ctx.lineTo(x+r,y+r);ctx.moveTo(x+r,y-r);ctx.lineTo(x-r,y+r);ctx.stroke();}
+// personagens: 3D de verdade (placa de vídeo da TV) ou, se não der, os fofinhos 2D
+function drawPlayers(pls,map,now,opt){
+ if(use3D){
+  const heads=Fofo3D.frame(pls.map(p=>({c:p.c,id:chars[p.c],k:p.k,col:COLORS[p.c],gray:!!p.g,hidden:!!p.b})),map,now);
+  was3D=true;
+  for(const h of heads){
+   const p=pls.find(q=>q.c===h.c);
+   pill(h.hx,h.hy-h.top-h.R*0.25,'J'+(h.c+1),p&&p.g?'#777':COLORS[h.c],h.R);
+   if(p&&p.x)xMark(h.hx,h.hy,h.R*0.8);
+  }
+  return;
+ }
+ pls.forEach(p=>{
+  if(!p.k||p.b)return;
+  drawChar(ctx,p.k,map,chars[p.c],COLORS[p.c],{alpha:opt.alpha||1,gray:!!p.g,label:'J'+(p.c+1)});
+  if(p.x&&vis(p.k[0])>0.3){const [x,y]=map(p.k[0]);xMark(x,y,CH*0.06);}
+ });
+}
 function drawScene(now){
  const S=scene;if(!S)return;
  const dts=Math.min(0.2,(now-sceneAt)/1000);
  const pls=playersNow(now);
  if(S.g==='danca'){
   const ph=CH*0.45,pw=ph*0.8,px=CW-pw-CW*0.02,py=CH-ph-CH*0.05;
-  ctx.fillStyle='rgba(0,0,0,.55)';rr(ctx,px,py,pw,ph,14);ctx.fill();
   let w=pw,h=w/feedAr;if(h>ph){h=ph;w=h*feedAr;}
   const ox=px+(pw-w)/2,oy=py+(ph-h)/2,map=p=>[ox+(1-p.x)*w,oy+p.y*h];
-  pls.forEach(p=>drawChar(ctx,p.k,map,chars[p.c],COLORS[p.c],{label:'J'+(p.c+1)}));
+  setBg('danca:'+Math.round(px)+':'+Math.round(ph),b=>{b.clearRect(0,0,CW,CH);b.fillStyle='rgba(0,0,0,.55)';rr(b,px,py,pw,ph,14);b.fill();});
+  drawPlayers(pls,map,now,{});
   drawHud(Object.assign({},S.hud,{r:vid.duration?fmt(vid.duration-vid.currentTime):''}));
   bigText(S.big);
   if(vid.duration){ctx.fillStyle='#ff2d7a';ctx.fillRect(0,CH-8,CW*vid.currentTime/vid.duration,8);}
   return;
  }
- ctx.drawImage(makeBg(S.g),0,0);
+ setBg(S.g,b=>{b.clearRect(0,0,CW,CH);b.drawImage(makeBg(S.g),0,0);});
  // objetos atrás dos jogadores
  if(S.g==='corrida'&&S.ln){
   const n=S.ln.length,top=CH*0.17,lh=Math.min(CH*0.13,(CH*0.5)/n),x0=CW*0.05,x1=CW*0.88;
@@ -418,11 +457,7 @@ function drawScene(now){
   ctx.restore();
  }
  // jogadores (personagens)
- pls.forEach(p=>{
-  if(!p.k||p.b)return;
-  drawChar(ctx,p.k,scr,chars[p.c],COLORS[p.c],{alpha:S.g==='corrida'?0.8:1,gray:!!p.g,label:'J'+(p.c+1)});
-  if(p.x&&vis(p.k[0])>0.3){const [x,y]=scr(p.k[0]),r=CH*0.06;ctx.strokeStyle='#f87171';ctx.lineWidth=10;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(x-r,y-r);ctx.lineTo(x+r,y+r);ctx.moveTo(x+r,y-r);ctx.lineTo(x-r,y+r);ctx.stroke();}
- });
+ drawPlayers(pls,scr,now,{alpha:S.g==='corrida'?0.8:1});
  // objetos na frente
  if(S.g==='baloes'){
   for(const [x0,y0,r0,ty,ci,vy] of S.ob||[]){
@@ -470,18 +505,20 @@ function adaptScale(now){
  if(lastF){fAvg=fAvg*0.95+Math.min(100,now-lastF)*0.05;}lastF=now;
  if(tstate!=='play')return;
  if(fAvg>24&&rscale>0.5){if(!slowSince)slowSince=now;else if(now-slowSince>1500){rscale=rscale>0.75?0.75:0.5;resize();slowSince=0;}}
+ else if(fAvg>30&&rscale<=0.5&&use3D){if(!slowSince)slowSince=now;else if(now-slowSince>2500){use3D=false;Fofo3D.clear();slowSince=0;console.log('TV lenta: voltando para personagens 2D');}}
  else slowSince=0;
 }
 function drawDiag(){
  ctx.save();ctx.font='600 '+Math.max(11,CH*0.018)+'px system-ui,sans-serif';ctx.textAlign='left';ctx.textBaseline='bottom';
  ctx.fillStyle='rgba(255,255,255,.55)';
- ctx.fillText('rede '+Math.round(rtt/2)+' ms · câmera '+Math.round(pipeLat)+' ms'+(rscale<1?' · resolução '+Math.round(rscale*100)+'%':''),CW*0.01,CH*0.995);
+ ctx.fillText('rede '+Math.round(rtt/2)+' ms · câmera '+Math.round(pipeLat)+' ms'+(rscale<1?' · resolução '+Math.round(rscale*100)+'%':'')+(use3D?' · 3D':' · 2D'),CW*0.01,CH*0.995);
  ctx.restore();
 }
 function frame(now){
  adaptScale(now);
  ctx.clearRect(0,0,CW,CH);
  if(tstate==='play'||tstate==='count'){drawScene(now);drawDiag();}
+ else{clearBg();if(was3D&&window.Fofo3D){Fofo3D.clear();was3D=false;}}
  requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
