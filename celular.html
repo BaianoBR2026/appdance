@@ -224,7 +224,11 @@ function nativeStart(facing){
  return new Promise((res,rej)=>{
   const to=setTimeout(()=>rej(new Error('a câmera do app não respondeu. Feche e abra o app de novo.')),12000);
   nativeReady=()=>{clearTimeout(to);nativeReady=null;res();};
-  window.onNativeStatus=s=>{if(!s.ok){clearTimeout(to);rej(new Error(s.msg));}else gpuOn=s.delegate==='GPU';};
+  window.onNativeStatus=s=>{
+   if(!s.ok){clearTimeout(to);rej(new Error(s.msg));return;}
+   gpuOn=s.delegate==='GPU';
+   if(s.msg&&$('s2').hidden===false)$('st2').innerHTML='<b>'+s.msg+'</b>';
+  };
   AppDanceNativo.start(facing||'user');
  });
 }

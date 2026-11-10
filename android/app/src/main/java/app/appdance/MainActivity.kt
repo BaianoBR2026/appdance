@@ -3,7 +3,9 @@ package app.appdance
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Matrix
 import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
@@ -32,7 +34,6 @@ import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.framework.image.MPImage
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.core.Delegate
-import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
@@ -66,6 +67,16 @@ class MainActivity : ComponentActivity() {
     private var lastTs = 0L
     private var pendingStart = false
     private var fileCallback: ValueCallback<Array<Uri>>? = null
+    @Volatile private var lastRot = 0
+    @Volatile private var lastW = 0
+    @Volatile private var lastH = 0
+
+    // teste automático GPU x CPU (fica com o mais rápido e guarda a escolha)
+    private val prefs by lazy { getSharedPreferences("appdance", MODE_PRIVATE) }
+    @Volatile private var forced: String? = null
+    @Volatile private var benchStage = 0          // 0 = sem teste, 1 = medindo GPU, 2 = medindo CPU
+    private val benchTimes = ArrayList<Double>()
+    private var gpuAvg = 0.0
 
     // dados de cada quadro enviado ao detector: início do processamento, aspecto e hora do sensor
     private class Frame(val startNs: Long, val sensorNs: Long, val ar: Float)
@@ -149,7 +160,9 @@ class MainActivity : ComponentActivity() {
             if (v != numPoses) { numPoses = v; exec.execute { buildLandmarker() } }
         }
         @JavascriptInterface fun info(): String = JSONObject()
-            .put("delegate", delegateName).put("versao", BuildConfig.VERSION_NAME).put("poses", numPoses).toString()
+            .put("delegate", delegateName).put("versao", BuildConfig.VERSION_NAME).put("poses", numPoses)
+            .put("rot", lastRot).put("w", lastW).put("h", lastH).toString()
+        @JavascriptInterface fun retestar() { prefs.edit().remove("delegate").apply(); startBench() }
     }
 
     private fun status(ok: Boolean, msg: String) {
@@ -160,10 +173,41 @@ class MainActivity : ComponentActivity() {
     // ---------- detector de corpo (MediaPipe nativo, GPU quando der) ----------
     private fun buildLandmarker() {
         try { landmarker?.close() } catch (_: Exception) {}
-        landmarker = try { create(Delegate.GPU).also { delegateName = "GPU" } }
-        catch (e: Exception) {
-            Log.w(TAG, "GPU indisponível, usando CPU", e)
-            try { create(Delegate.CPU).also { delegateName = "CPU" } } catch (e2: Exception) { Log.e(TAG, "detector falhou", e2); null }
+        landmarker = null
+        frames.clear()
+        val want = forced ?: prefs.getString("delegate", null)
+        val order = if (want == "CPU") listOf(Delegate.CPU, Delegate.GPU) else listOf(Delegate.GPU, Delegate.CPU)
+        for (d in order) {
+            try {
+                landmarker = create(d)
+                delegateName = if (d == Delegate.GPU) "GPU" else "CPU"
+                break
+            } catch (e: Exception) { Log.w(TAG, "detector $d indisponível", e) }
+        }
+    }
+
+    private fun startBench() {
+        benchTimes.clear(); benchStage = 1; forced = "GPU"
+        exec.execute { buildLandmarker() }
+    }
+
+    private fun bench(ms: Double) {
+        benchTimes.add(ms)
+        if (benchTimes.size < 26) return
+        val avg = benchTimes.drop(8).average()
+        benchTimes.clear()
+        if (benchStage == 1) {
+            gpuAvg = if (delegateName == "GPU") avg else 9999.0
+            benchStage = 2; forced = "CPU"
+            exec.execute { buildLandmarker() }
+        } else if (benchStage == 2) {
+            val cpuAvg = if (delegateName == "CPU") avg else 9999.0
+            val best = if (gpuAvg <= cpuAvg) "GPU" else "CPU"
+            prefs.edit().putString("delegate", best).apply()
+            benchStage = 0; forced = null
+            Log.i(TAG, "GPU ${gpuAvg}ms x CPU ${cpuAvg}ms -> $best")
+            if (best != delegateName) exec.execute { buildLandmarker() }
+            status(true, "Processador escolhido: $best (GPU ${Math.round(gpuAvg)} ms, CPU ${Math.round(cpuAvg)} ms)")
         }
     }
 
@@ -203,6 +247,7 @@ class MainActivity : ComponentActivity() {
                 p.bindToLifecycle(this, selector, analysis)
                 running = true
                 status(true, "Câmera do app ligada")
+                if (prefs.getString("delegate", null) == null && benchStage == 0) startBench()
             } catch (e: Exception) {
                 Log.e(TAG, "câmera falhou", e)
                 status(false, "Não consegui ligar a câmera: ${e.message}")
@@ -221,18 +266,22 @@ class MainActivity : ComponentActivity() {
         val start = SystemClock.elapsedRealtimeNanos()
         val rot = img.imageInfo.rotationDegrees
         val sensor = img.imageInfo.timestamp
-        val bmp = try { img.toBitmap() } catch (e: Exception) { img.close(); return }
-        val w = img.width; val h = img.height
+        val src = try { img.toBitmap() } catch (e: Exception) { img.close(); return }
         img.close()
-        val ar = if (rot % 180 == 0) w.toFloat() / h else h.toFloat() / w
+        // endireita a imagem aqui mesmo: assim os pontos do corpo saem na proporção certa
+        val bmp = if (rot != 0) {
+            val m = Matrix(); m.postRotate(rot.toFloat())
+            Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, false)
+        } else src
+        val ar = bmp.width.toFloat() / bmp.height
+        lastRot = rot; lastW = bmp.width; lastH = bmp.height
         var ts = SystemClock.uptimeMillis()
         if (ts <= lastTs) ts = lastTs + 1
         lastTs = ts
         frames[ts] = Frame(start, sensor, ar)
         if (frames.size > 30) frames.keys.sorted().take(frames.size - 30).forEach { frames.remove(it) }
         try {
-            val opts = ImageProcessingOptions.builder().setRotationDegrees(rot).build()
-            lm.detectAsync(BitmapImageBuilder(bmp).build(), opts, ts)
+            lm.detectAsync(BitmapImageBuilder(bmp).build(), ts)
         } catch (e: Exception) {
             Log.e(TAG, "detectAsync", e)
         }
@@ -247,11 +296,13 @@ class MainActivity : ComponentActivity() {
         val inferMs = if (fr != null) (now - fr.startNs) / 1_000_000.0 else 0.0
         var lat = if (fr != null && fr.sensorNs > 0) (now - fr.sensorNs) / 1_000_000.0 else -1.0
         if (lat < 0 || lat > 600) lat = inferMs + 33.0       // relógio do sensor diferente: estimativa
+        if (benchStage > 0 && fr != null) bench(inferMs)
         val sb = StringBuilder(2048)
         sb.append("{\"ar\":").append(fr?.ar ?: 0.75f)
             .append(",\"ms\":").append(Math.round(inferMs))
             .append(",\"lat\":").append(Math.round(lat))
-            .append(",\"d\":\"").append(delegateName).append("\",\"p\":[")
+            .append(",\"d\":\"").append(delegateName).append("\",\"rot\":").append(lastRot)
+            .append(",\"t\":").append(if (benchStage > 0) 1 else 0).append(",\"p\":[")
         r.landmarks().forEachIndexed { i, pose ->
             if (i > 0) sb.append(',')
             sb.append('[')
