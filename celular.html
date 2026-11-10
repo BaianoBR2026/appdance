@@ -249,6 +249,84 @@ function setPoses(n){
  if(!lm||n===curPoses)return;curPoses=n;
  try{const p=lm.setOptions({numPoses:n});if(p&&p.catch)p.catch(()=>{});}catch(_){}
 }
+// ---- rosto e mãos (só no app): cada rosto e cada mão vai para a criança mais próxima ----
+const EXTRAS=NATIVE&&!!(AppDanceNativo.extras&&(()=>{try{return AppDanceNativo.extras();}catch(_){return false;}})());
+let extrasOn=false;
+function setExtras(on){if(!EXTRAS||on===extrasOn)return;extrasOn=on;try{AppDanceNativo.setExtras(on,on);}catch(_){}}
+const cl=(v,a,b)=>Math.max(a===undefined?0:a,Math.min(b===undefined?1:b,v));
+function shW(k){return vis(k[11])>0.3&&vis(k[12])>0.3?Math.max(0.03,Math.hypot((k[11].x-k[12].x)*feedAr,k[11].y-k[12].y)):0.12;}
+function headTurn(k){                                  // virar e abaixar a cabeça (pelas orelhas e nariz do corpo)
+ const n=k[0],a=k[7],b=k[8];if(vis(n)<0.3)return[0,0];
+ const ea=vis(a)>0.2,eb=vis(b)>0.2;if(!ea&&!eb)return[0,0];
+ const mx=ea&&eb?(a.x+b.x)/2:(ea?a.x:b.x),my=ea&&eb?(a.y+b.y)/2:(ea?a.y:b.y);
+ const d=ea&&eb?Math.max(0.01,Math.hypot((a.x-b.x)*feedAr,a.y-b.y)):shW(k)*0.45;
+ return[cl((n.x-mx)*feedAr/d,-1,1),cl((n.y-my)/d-0.2,-1,1)];
+}
+function faceParams(b,k){
+ const g=i=>b[i]||0;
+ const blink=v=>cl((v-0.32)/0.45);
+ const smile=cl(((g(44)+g(45))/2-0.04)/0.55)-cl(((g(30)+g(31))/2)/0.45)*0.5;
+ const brow=cl((g(3)*0.7+(g(4)+g(5))*0.3)/0.55)-cl(((g(1)+g(2))/2-0.05)/0.45);
+ const gx=((g(15)+g(14))-(g(13)+g(16)))/2,gy=((g(17)+g(18))-(g(11)+g(12)))/2;
+ const [yaw,pitch]=headTurn(k);
+ return[blink(g(9)),blink(g(10)),cl((g(25)-0.04)/0.55),smile,cl(brow,-1,1),cl(gx*1.6,-1,1),cl(gy*1.6,-1,1),cl((g(38)+g(32)*0.5)/0.6),cl(g(6)/0.45),yaw,pitch,cl(((g(21)+g(22))/2)/0.5)];
+}
+const v3=(m,i)=>[m[i*3],m[i*3+1],m[i*3+2]],sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+function ang3(u,v){const d=u[0]*v[0]+u[1]*v[1]+u[2]*v[2],l=Math.hypot(...u)*Math.hypot(...v)||1;return Math.acos(cl(d/l,-1,1));}
+const FING=[[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16],[17,18,19,20]];
+function handParams(hd){
+ const m=hd.m,I=hd.i;if(!m||m.length<63||!I||I.length<42)return null;
+ const w=v3(m,0),palm=Math.hypot(...sub(v3(m,9),w))||1;
+ const curls=FING.map((f,fi)=>{
+  const j=f.map(i=>v3(m,i));
+  if(fi===0){
+   const bend=ang3(sub(j[1],j[0]),sub(j[2],j[1]))+ang3(sub(j[2],j[1]),sub(j[3],j[2]));
+   const across=Math.hypot(...sub(j[3],v3(m,17)))/palm;      // ponta do dedão perto do mindinho = dobrado
+   return cl(cl((bend-0.3)/1.1)*0.5+cl((1.45-across)/0.8)*0.5);
+  }
+  const bend=ang3(sub(j[0],w),sub(j[1],j[0]))+ang3(sub(j[1],j[0]),sub(j[2],j[1]))+ang3(sub(j[2],j[1]),sub(j[3],j[2]));
+  return cl((bend-0.3)/2.5);
+ });
+ // direção da mão e lado do dedão, já no espaço espelhado do telão (y para cima)
+ const P=i=>[(1-I[i*2])*feedAr,-I[i*2+1]];
+ const a=P(0),bb=P(9),t=P(5),D=[bb[0]-a[0],bb[1]-a[1]],T=[t[0]-a[0],t[1]-a[1]];
+ return{th:Math.atan2(-D[0],D[1]),sx:(T[0]*D[1]-T[1]*D[0])>=0?1:-1,c:curls,w:[I[0],I[1]]};
+}
+function angLerp(a,b,k){let d=b-a;while(d>Math.PI)d-=2*Math.PI;while(d<-Math.PI)d+=2*Math.PI;return a+d*k;}
+window.onNativeFace=d=>{
+ if(state!=='play'&&state!=='count')return;
+ const now=performance.now(),fs=(d.f||[]).filter(f=>f.n&&f.b&&f.b.length>=52),used=new Set();
+ slots.forEach(s=>{
+  if(!s.k||vis(s.k[0])<0.3)return;
+  let bi=-1,bd=shW(s.k)*0.9;
+  fs.forEach((f,j)=>{if(used.has(j))return;const dd=Math.hypot((f.n[0]-s.k[0].x)*feedAr,f.n[1]-s.k[0].y);if(dd<bd){bd=dd;bi=j;}});
+  if(bi<0)return;used.add(bi);
+  const v=faceParams(fs[bi].b,s.k);
+  s.fv=s.fv&&now-s.fAt<500?s.fv.map((o,i)=>o+(v[i]-o)*(i<2?0.85:0.6)):v;s.fAt=now;
+ });
+};
+window.onNativeHands=d=>{
+ if(state!=='play'&&state!=='count')return;
+ const now=performance.now(),hs=(d.h||[]).map(handParams).filter(Boolean),cand=[];
+ slots.forEach((s,si)=>{if(!s.k)return;const lim=shW(s.k)*0.7;
+  [15,16].forEach((wi,side)=>{const p=s.k[wi];if(vis(p)<0.2)return;
+   hs.forEach((h,hj)=>{const dd=Math.hypot((h.w[0]-p.x)*feedAr,h.w[1]-p.y);if(dd<lim)cand.push([dd,si,side,hj]);});});});
+ cand.sort((a,b)=>a[0]-b[0]);
+ const usedH=new Set(),usedA=new Set();
+ for(const [dd,si,side,hj] of cand){
+  const key=si*2+side;if(usedH.has(hj)||usedA.has(key))continue;usedH.add(hj);usedA.add(key);
+  const s=slots[si],h=hs[hj];s.hv=s.hv||[null,null];s.hAt=s.hAt||[0,0];
+  const o=s.hv[side];
+  s.hv[side]=o&&now-s.hAt[side]<500?{th:angLerp(o.th,h.th,0.6),sx:h.sx,c:o.c.map((c,i)=>c+(h.c[i]-c)*0.7)}:{th:h.th,sx:h.sx,c:h.c};
+  s.hAt[side]=now;
+ }
+};
+function extrasFor(s){
+ const now=performance.now(),o={};
+ if(s.fv&&now-s.fAt<450)o.f=s.fv.map(v=>Math.round(v*100));
+ if(s.hv){const h=s.hv.map((v,i)=>v&&now-s.hAt[i]<450?[Math.round(v.th*100),v.sx].concat(v.c.map(c=>Math.round(c*100))):0);if(h[0]||h[1])o.h=h;}
+ return o;
+}
 function centerX(k){let s=0,n=0;for(const i of [11,12,23,24])if(vis(k[i])>0.4){s+=k[i].x;n++;}return n?1-s/n:null;}
 function visiblePeople(){return persons.map(k=>({k,c:centerX(k)})).filter(o=>o.c!=null).sort((a,b)=>a.c-b.c);}
 function torso(k){
@@ -282,12 +360,12 @@ function track(){
  for(const s of slots){if(s.nk)continue;let bi=-1,bd=9;vp.forEach((o,j)=>{if(used.has(j))return;const d=Math.abs(o.c-s.x);if(d<bd){bd=d;bi=j;}});if(bi>=0){used.add(bi);s.nk=vp[bi];}}
  for(const s of slots){
   if(s.nk){s.k=smoothK(s,s.nk.k,frameTs||now);s.x=s.nk.c;s.seen=now;}
-  else if(now-s.seen>600){s.k=null;s.flt=null;}                 // perdeu a pessoa: zera o filtro
+  else if(now-s.seen>600){s.k=null;s.flt=null;s.fv=null;s.hv=null;}                 // perdeu a pessoa: zera o filtro
  }
  return true;
 }
 // esqueletos dos jogadores para o telão; o: (i)=>({g:cinza,b:piscando,x:marcaX})
-function plScene(o){return slots.map((s,i)=>Object.assign({k:s.k?pack(s.k):null,c:i},o?o(i):{}));}
+function plScene(o){return slots.map((s,i)=>Object.assign({k:s.k?pack(s.k):null,c:i},s.k?extrasFor(s):{},o?o(i):{}));}
 
 // ================= JOGOS (toda a lógica roda aqui no celular) =================
 const fbCol=t=>t==='PERFEITO!'?'#4ade80':t==='BOM'?'#facc15':'#f87171';
@@ -486,8 +564,19 @@ const Desvia={
  results(){return this.pl.map((p,i)=>({i,score:p.morto===null?1000+p.vidas:p.morto,txt:p.morto===null?'Sobreviveu com '+p.vidas+(p.vidas>1?' vidas':' vida'):'Durou '+p.morto.toFixed(1)+' s'})).sort((a,b)=>b.score-a.score);}
 };
 
-const GAMES={danca:Danca,baloes:Baloes,corrida:Corrida,estatua:Estatua,desvia:Desvia};
-const ORDER=['danca','baloes','corrida','estatua','desvia'];
+const Espelho={
+ id:'espelho',nome:'Espelho',curta:'O boneco imita sua carinha e seus dedos',
+ desc:'O telão chega pertinho e o boneco copia tudo: piscar, abrir a boca, sorrir, a sobrancelha e os dedinhos. Siga os desafios que aparecem. 90 segundos, sem pontos: é só brincar.',
+ PED:[['Pisque os olhos!','#22d3ee'],['Abra bem a boca!','#ff2d7a'],['Sorria bem grande!','#facc15'],['Faça cara de bravo!','#f87171'],['Mostre 3 dedinhos!','#4ade80'],['Faça joinha!','#22d3ee'],['Feche as mãos!','#facc15'],['Levante as sobrancelhas!','#ff2d7a'],['Faça biquinho!','#f472b6'],['Mostre 5 dedos!','#4ade80'],['Olhe para o lado!','#22d3ee'],['Encha as bochechas!','#facc15']],
+ start(n){this.n=n;this.t=0;this.dur=90;this.i=-1;this.next=0;},
+ update(dt){this.t+=dt;if(this.t>=this.next){this.i=(this.i+1)%this.PED.length;this.next=this.t+6;}if(this.t>=this.dur)endGame();},
+ scene(){const p=this.i>=0?this.PED[this.i]:null;
+  return{pl:plScene(),hud:{ch:slots.map((s,i)=>({c:COLORS[i],t:'J'+(i+1)})),r:fmt(this.dur-this.t)},
+   big:p?{t:p[0],c:p[1],y:0.92,s:0.08}:null,ex:EXTRAS?1:0};},
+ results(){return slots.map((s,i)=>({i,score:0,txt:'Brincou de espelho!'}));}
+};
+const GAMES={danca:Danca,baloes:Baloes,corrida:Corrida,estatua:Estatua,desvia:Desvia,espelho:Espelho};
+const ORDER=['danca','espelho','baloes','corrida','estatua','desvia'];
 
 // ================= vídeo da dança (preparado aqui no celular) =================
 function setPrep(p,txt){prepPct=p;$('pfill').style.width=p+'%';$('pstat').textContent=txt;}
@@ -569,7 +658,7 @@ function startGame(){
  initSlots(n);
  setPoses(n);                                                   // procurar só quantas pessoas estão jogando = mais rápido
  game=GAMES[selGame];game.start(n);
- state='count';
+ state='count';setExtras(true);                                   // liga rosto e mãos já na contagem (leva ~1 s para carregar)
  let c=3;send({type:'count',c,n,nome:game.nome});
  $('st2').innerHTML='<b>'+game.nome+'</b> começando! Olhem para o telão.';
  const iv=setInterval(()=>{
@@ -583,15 +672,15 @@ function startGame(){
 }
 function endGame(){
  if(state!=='play')return;
- state='res';
+ state='res';setExtras(false);
  if(game.stop)game.stop();
  const r=game.results(),tie=game.n>1&&r.length>1&&r[0].score===r[1].score;
- send({type:'res',title:'Fim: '+game.nome,winner:game.n===1?r[0].txt:(tie?'Empate!':'Jogador '+(r[0].i+1)+' venceu!'),wc:tie?-1:r[0].i,rank:r.map(x=>({i:x.i,txt:x.txt}))});
+ send({type:'res',title:'Fim: '+game.nome,winner:game.id==='espelho'?'Que caretas lindas!':game.n===1?r[0].txt:(tie?'Empate!':'Jogador '+(r[0].i+1)+' venceu!'),wc:tie?-1:r[0].i,rank:r.map(x=>({i:x.i,txt:x.txt}))});
  $('st2').innerHTML='Fim de jogo! Veja o resultado no telão. Aperte Começar para jogar de novo.';
 }
 function toLobby(){
  if(game&&game.stop&&(state==='play'||state==='count'))game.stop();
- state='lobby';send({type:'menu'});lastLobby=0;
+ state='lobby';setExtras(false);send({type:'menu'});lastLobby=0;
  $('st2').innerHTML='<b>Menu.</b> Escolha o jogo aqui ou no telão.';
 }
 function sendLobby(){

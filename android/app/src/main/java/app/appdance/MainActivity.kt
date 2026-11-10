@@ -35,6 +35,10 @@ import com.google.mediapipe.framework.image.MPImage
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.core.Delegate
 import com.google.mediapipe.tasks.vision.core.RunningMode
+import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
+import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
+import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
+import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
 import org.json.JSONObject
@@ -53,12 +57,21 @@ class MainActivity : ComponentActivity() {
     companion object {
         const val PAGE = "https://appdance.netlify.app/celular.html?app=1"
         const val MODEL = "pose_landmarker_lite.task"
+        const val FACE_MODEL = "face_landmarker.task"
+        const val HAND_MODEL = "hand_landmarker.task"
         const val TAG = "AppDance"
     }
 
     private lateinit var web: WebView
     private val exec: ExecutorService = Executors.newSingleThreadExecutor()
     private var landmarker: PoseLandmarker? = null
+    // rosto (expressões) e mãos (dedos): ligados só durante o jogo, em quadros alternados
+    private var faceLm: FaceLandmarker? = null
+    private var handLm: HandLandmarker? = null
+    @Volatile private var wantFace = false
+    @Volatile private var wantHands = false
+    private var extrasPoses = 0
+    private var frameNo = 0L
     private var provider: ProcessCameraProvider? = null
     @Volatile private var running = false
     @Volatile private var numPoses = 3
@@ -157,11 +170,17 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface fun stop() { runOnUiThread { stopCamera() } }
         @JavascriptInterface fun setPoses(n: Int) {
             val v = n.coerceIn(1, 3)
-            if (v != numPoses) { numPoses = v; exec.execute { buildLandmarker() } }
+            if (v != numPoses) { numPoses = v; exec.execute { buildLandmarker(); if (wantFace || wantHands) buildExtras() } }
+        }
+        @JavascriptInterface fun extras(): Boolean = true
+        @JavascriptInterface fun setExtras(face: Boolean, hands: Boolean) {
+            wantFace = face; wantHands = hands
+            exec.execute { buildExtras() }
         }
         @JavascriptInterface fun info(): String = JSONObject()
             .put("delegate", delegateName).put("versao", BuildConfig.VERSION_NAME).put("poses", numPoses)
-            .put("rot", lastRot).put("w", lastW).put("h", lastH).toString()
+            .put("rot", lastRot).put("w", lastW).put("h", lastH)
+            .put("rosto", faceLm != null).put("maos", handLm != null).toString()
         @JavascriptInterface fun retestar() { prefs.edit().remove("delegate").apply(); startBench() }
     }
 
@@ -226,6 +245,82 @@ class MainActivity : ComponentActivity() {
         return PoseLandmarker.createFromOptions(this, opts)
     }
 
+    // ---------- rosto e mãos ----------
+    private fun buildExtras() {
+        val n = numPoses
+        val needFace = wantFace && (faceLm == null || extrasPoses != n)
+        val needHand = wantHands && (handLm == null || extrasPoses != n)
+        if (!wantFace || needFace) { try { faceLm?.close() } catch (_: Exception) {}; faceLm = null }
+        if (!wantHands || needHand) { try { handLm?.close() } catch (_: Exception) {}; handLm = null }
+        val order = if (delegateName == "CPU") listOf(Delegate.CPU, Delegate.GPU) else listOf(Delegate.GPU, Delegate.CPU)
+        if (needFace) for (d in order) {
+            try {
+                val base = BaseOptions.builder().setModelAssetPath(FACE_MODEL).setDelegate(d).build()
+                faceLm = FaceLandmarker.createFromOptions(this, FaceLandmarker.FaceLandmarkerOptions.builder()
+                    .setBaseOptions(base).setRunningMode(RunningMode.LIVE_STREAM)
+                    .setNumFaces(n).setOutputFaceBlendshapes(true)
+                    .setMinFaceDetectionConfidence(0.5f).setMinFacePresenceConfidence(0.5f).setMinTrackingConfidence(0.5f)
+                    .setResultListener { r: FaceLandmarkerResult, _: MPImage -> onFace(r) }
+                    .setErrorListener { e -> Log.e(TAG, "erro no rosto", e) }
+                    .build())
+                break
+            } catch (e: Exception) { Log.w(TAG, "rosto $d indisponível", e) }
+        }
+        if (needHand) for (d in order) {
+            try {
+                val base = BaseOptions.builder().setModelAssetPath(HAND_MODEL).setDelegate(d).build()
+                handLm = HandLandmarker.createFromOptions(this, HandLandmarker.HandLandmarkerOptions.builder()
+                    .setBaseOptions(base).setRunningMode(RunningMode.LIVE_STREAM)
+                    .setNumHands(n * 2)
+                    .setMinHandDetectionConfidence(0.5f).setMinHandPresenceConfidence(0.5f).setMinTrackingConfidence(0.5f)
+                    .setResultListener { r: HandLandmarkerResult, _: MPImage -> onHands(r) }
+                    .setErrorListener { e -> Log.e(TAG, "erro nas mãos", e) }
+                    .build())
+                break
+            } catch (e: Exception) { Log.w(TAG, "mãos $d indisponível", e) }
+        }
+        extrasPoses = n
+    }
+
+    // expressões do rosto: 52 valores (ordem fixa do modelo) + posição da ponta do nariz
+    private fun onFace(r: FaceLandmarkerResult) {
+        val sb = StringBuilder(1500)
+        sb.append("{\"f\":[")
+        val bs = if (r.faceBlendshapes().isPresent) r.faceBlendshapes().get() else emptyList()
+        r.faceLandmarks().forEachIndexed { i, lm ->
+            if (i > 0) sb.append(',')
+            val nose = lm[1]
+            sb.append("{\"n\":[").append(r3(nose.x())).append(',').append(r3(nose.y())).append("],\"b\":[")
+            val cats = if (i < bs.size) bs[i].sortedBy { it.index() } else emptyList()
+            cats.forEachIndexed { j, c -> if (j > 0) sb.append(','); sb.append(r2(c.score())) }
+            sb.append("]}")
+        }
+        sb.append("]}")
+        val js = "window.onNativeFace&&window.onNativeFace($sb)"
+        web.post { web.evaluateJavascript(js, null) }
+    }
+
+    // mãos: 21 pontos na imagem (x,y) + 21 pontos em 3D (décimos de milímetro) para medir a dobra dos dedos
+    private fun onHands(r: HandLandmarkerResult) {
+        val sb = StringBuilder(4000)
+        sb.append("{\"h\":[")
+        val world = r.worldLandmarks()
+        r.landmarks().forEachIndexed { i, lm ->
+            if (i > 0) sb.append(',')
+            sb.append("{\"i\":[")
+            lm.forEachIndexed { j, p -> if (j > 0) sb.append(','); sb.append(r3(p.x())).append(',').append(r3(p.y())) }
+            sb.append("],\"m\":[")
+            if (i < world.size) world[i].forEachIndexed { j, p ->
+                if (j > 0) sb.append(',')
+                sb.append(Math.round(p.x() * 10000f)).append(',').append(Math.round(p.y() * 10000f)).append(',').append(Math.round(p.z() * 10000f))
+            }
+            sb.append("]}")
+        }
+        sb.append("]}")
+        val js = "window.onNativeHands&&window.onNativeHands($sb)"
+        web.post { web.evaluateJavascript(js, null) }
+    }
+
     // ---------- câmera (CameraX): só a imagem mais recente, em resolução pequena ----------
     private fun startCamera() {
         val future = ProcessCameraProvider.getInstance(this)
@@ -285,6 +380,15 @@ class MainActivity : ComponentActivity() {
         } catch (e: Exception) {
             Log.e(TAG, "detectAsync", e)
         }
+        // rosto e mãos em quadros alternados (o corpo continua em todos os quadros)
+        if (benchStage == 0) {
+            frameNo++
+            val f = faceLm; val h = handLm
+            val doFace = f != null && (h == null || frameNo % 2L == 0L)
+            val doHand = h != null && (f == null || frameNo % 2L == 1L)
+            try { if (doFace) f!!.detectAsync(BitmapImageBuilder(bmp).build(), ts) } catch (e: Exception) { Log.e(TAG, "rosto", e) }
+            try { if (doHand) h!!.detectAsync(BitmapImageBuilder(bmp).build(), ts) } catch (e: Exception) { Log.e(TAG, "mãos", e) }
+        }
     }
 
     private fun r3(f: Float) = Math.round(f * 1000f) / 1000f
@@ -322,7 +426,11 @@ class MainActivity : ComponentActivity() {
     override fun onResume() { super.onResume(); web.onResume() }
     override fun onDestroy() {
         stopCamera()
-        exec.execute { try { landmarker?.close() } catch (_: Exception) {} }
+        exec.execute {
+            try { landmarker?.close() } catch (_: Exception) {}
+            try { faceLm?.close() } catch (_: Exception) {}
+            try { handLm?.close() } catch (_: Exception) {}
+        }
         exec.shutdown()
         web.destroy()
         super.onDestroy()

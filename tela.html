@@ -112,6 +112,7 @@ const IDX=[0,11,12,13,14,15,16,19,20,23,24,25,26,27,28];
 const BONES=[[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28]];
 const GLIST=[
  {id:'danca',nome:'Dança',curta:'Copie o dançarino do vídeo',desc:'Copiem os movimentos do vídeo, espelhado. Cada jogador ganha nota a cada segundo.'},
+ {id:'espelho',nome:'Espelho',curta:'O boneco imita sua carinha e seus dedos',desc:'O telão chega pertinho e o boneco copia o rosto e os dedinhos de cada criança. Precisa do app no celular.'},
  {id:'baloes',nome:'Estoura Balões',curta:'Estoure com as mãos',desc:'Estourem os balões com as mãos. Dourado vale 3, bomba tira 3. 60 segundos.'},
  {id:'corrida',nome:'Corrida Parada',curta:'Corra sem sair do lugar',desc:'Corram no lugar levantando os joelhos. Primeiro a 50 passos vence.'},
  {id:'estatua',nome:'Estátua',curta:'Dance e congele',desc:'Dancem com a música e congelem quando aparecer ESTÁTUA. Quem se mexer sai.'},
@@ -289,7 +290,7 @@ function storePlayers(m,now){
     h.ck=k;h.cts=ts;h.ct=now;
    }else if(!h.ck){h.ck=k;h.cts=ts;h.ct=now;h.v=null;}
   }else{h.ck=null;h.v=null;}
-  h.g=p.g;h.b=p.b;h.x=p.x;
+  h.g=p.g;h.b=p.b;h.x=p.x;h.f=p.f;h.hh=p.h;
  }
  for(const c in hist)if(!seen.has(+c))delete hist[c];
 }
@@ -330,6 +331,10 @@ function makeBg(g){
   grad([[0,'#0d0718'],[1,'#1d0f33']]);
   for(const x of [0.25,0.5,0.75]){const gr=b.createRadialGradient(CW*x,CH*0.95,10,CW*x,CH*0.95,CH*0.7);gr.addColorStop(0,'rgba(255,255,255,.18)');gr.addColorStop(1,'rgba(255,255,255,0)');b.fillStyle=gr;b.fillRect(0,0,CW,CH);}
   b.fillStyle='#2a1747';b.fillRect(0,CH*0.9,CW,CH*0.1);
+ }else if(g==='espelho'){
+  grad([[0,'#2a1d5c'],[1,'#0e0a24']]);
+  const gr=b.createRadialGradient(CW/2,CH*0.5,10,CW/2,CH*0.5,CH*0.8);gr.addColorStop(0,'rgba(255,214,240,.22)');gr.addColorStop(1,'rgba(255,214,240,0)');b.fillStyle=gr;b.fillRect(0,0,CW,CH);
+  b.fillStyle='rgba(255,255,255,.6)';for(let i=0;i<80;i++){b.globalAlpha=0.2+rnd()*0.5;b.beginPath();b.arc(rnd()*CW,rnd()*CH,1+rnd()*2,0,7);b.fill();}b.globalAlpha=1;
  }else{grad([[0,'#160f24'],[1,'#07060b']]);}
  bgCache[key]=c;return c;
 }
@@ -390,7 +395,7 @@ document.addEventListener('keydown',()=>snd.ctx());
 
 // ================= desenho das cenas que vêm do celular =================
 function playersNow(now){
- return Object.keys(hist).map(c=>({c:+c,k:kNow(+c,now),g:hist[c].g,b:hist[c].b,x:hist[c].x}));
+ return Object.keys(hist).map(c=>({c:+c,k:kNow(+c,now),g:hist[c].g,b:hist[c].b,x:hist[c].x,f:hist[c].f,h:hist[c].hh}));
 }
 // fundo fica numa camada própria e só é redesenhado quando muda
 function setBg(key,draw){
@@ -409,7 +414,7 @@ function xMark(x,y,r){ctx.strokeStyle='#f87171';ctx.lineWidth=10;ctx.lineCap='ro
 // personagens: 3D de verdade (placa de vídeo da TV) ou, se não der, os fofinhos 2D
 function drawPlayers(pls,map,now,opt){
  if(use3D){
-  const heads=Fofo3D.frame(pls.map(p=>({c:p.c,id:chars[p.c],k:p.k,col:COLORS[p.c],gray:!!p.g,hidden:!!p.b})),map,now);
+  const heads=Fofo3D.frame(pls.map(p=>({c:p.c,id:chars[p.c],k:p.k,col:COLORS[p.c],gray:!!p.g,hidden:!!p.b,f:p.f,h:p.h})),map,now);
   was3D=true;
   for(const h of heads){
    const p=pls.find(q=>q.c===h.c);
@@ -423,6 +428,17 @@ function drawPlayers(pls,map,now,opt){
   drawChar(ctx,p.k,map,chars[p.c],COLORS[p.c],{alpha:opt.alpha||1,gray:!!p.g,label:'J'+(p.c+1)});
   if(p.x&&vis(p.k[0])>0.3){const [x,y]=map(p.k[0]);xMark(x,y,CH*0.06);}
  });
+}
+let zoomS=1,zoomX=-1,zoomY=0;
+function zoomMap(pls){
+ let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+ for(const p of pls){if(!p.k||p.b)continue;for(const i of [0,11,12,13,14,15,16,23,24]){const q=p.k[i];if(!q||q.v<0.4)continue;const [x,y]=scr(q);x0=Math.min(x0,x);x1=Math.max(x1,x);y0=Math.min(y0,y);y1=Math.max(y1,y);}}
+ if(x1>x0){
+  const s=Math.max(1,Math.min(2.4,CH*0.55/Math.max(1,y1-y0),CW*0.75/Math.max(1,x1-x0))),cx=(x0+x1)/2,cy=(y0+y1)/2;
+  if(zoomX<0){zoomS=s;zoomX=cx;zoomY=cy;}
+  zoomS+=(s-zoomS)*0.06;zoomX+=(cx-zoomX)*0.1;zoomY+=(cy-zoomY)*0.1;
+ }else if(zoomX<0){zoomX=CW/2;zoomY=CH/2;}
+ return p=>{const [x,y]=scr(p);return[CW/2+(x-zoomX)*zoomS,CH*0.6+(y-zoomY)*zoomS];};
 }
 function drawScene(now){
  const S=scene;if(!S)return;
@@ -456,8 +472,9 @@ function drawScene(now){
   });
   ctx.restore();
  }
- // jogadores (personagens)
- drawPlayers(pls,scr,now,{alpha:S.g==='corrida'?0.8:1});
+ // jogadores (personagens); no Espelho a câmera chega perto para ver o rosto e os dedos
+ drawPlayers(pls,S.g==='espelho'?zoomMap(pls):scr,now,{alpha:S.g==='corrida'?0.8:1});
+ if(S.g==='espelho'&&!S.ex){ctx.save();ctx.font='800 '+(CH*0.03)+'px system-ui,sans-serif';ctx.textAlign='center';ctx.fillStyle='#facc15';ctx.fillText('Para o boneco copiar o rosto e os dedos, use o app AppDance no celular (versão nova).',CW/2,CH*0.95);ctx.restore();}
  // objetos na frente
  if(S.g==='baloes'){
   for(const [x0,y0,r0,ty,ci,vy] of S.ob||[]){
@@ -595,7 +612,7 @@ function showLobby(m){
  ps.forEach((k,i)=>drawChar(mx,k,p=>[ox+(1-p.x)*W,oy+p.y*H],chars[i],COLORS[i],{}));
 }
 function goLobby(){
- tstate=conn?'lobby':'wait';scene=null;snd.music(false);
+ tstate=conn?'lobby':'wait';scene=null;snd.music(false);zoomX=-1;
  for(const c in hist)delete hist[c];
  $('res').hidden=true;$('countov').hidden=true;$('lobby').hidden=false;
 }

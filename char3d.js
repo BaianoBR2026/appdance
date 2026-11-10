@@ -1,5 +1,8 @@
 // Personagens 3D do AppDance (three.js, desenhados pela placa de vídeo da TV).
 // Usa os mesmos bichinhos de personagens.js (CUTE), agora com volume, luz e sombra de verdade.
+// Acabamento pelúcia (pelo macio com brilho aveludado). Use ?toon no endereço para o estilo desenho antigo.
+// Rosto e dedos em tempo real: p.f = [piscaE,piscaD,boca,sorriso,sobrancelha,olharX,olharY,biquinho,bochecha,virar,abaixar,arregalar] (x100)
+//                              p.h = [mão do pulso 15, mão do pulso 16], cada uma [ângulo x100, lado do dedão, 5 dobras x100] ou 0
 // API: Fofo3D.init(canvas) -> true/false ; Fofo3D.resize(w,h) ; Fofo3D.frame(lista, map, t) ; Fofo3D.clear()
 //  lista = [{c: índice do jogador, id: personagem, k: esqueleto, col: cor, gray, hidden}]
 //  devolve [{c, hx, hy, top}] com a posição da cabeça (para desenhar etiqueta J1/J2/J3 por cima)
@@ -10,7 +13,27 @@ const CUTE=global.CUTE;
 let renderer=null,scene=null,cam=null,W=1,H=1,ok=false;
 const UP=new T.Vector3(0,1,0);
 const chars={};      // por jogador
-let gradTex=null;
+let gradTex=null,furTex=null;
+const PLUSH=!/[?&]toon/.test((global.location&&global.location.search)||'');
+const SWAP_LR=/[?&]trocaolho/.test((global.location&&global.location.search)||'');   // se piscar sair no olho trocado
+function fur(){
+ if(furTex)return furTex;
+ const c=document.createElement('canvas');c.width=c.height=128;const g=c.getContext('2d'),im=g.createImageData(128,128);
+ for(let i=0;i<im.data.length;i+=4){const v=110+Math.random()*145;im.data[i]=im.data[i+1]=im.data[i+2]=v;im.data[i+3]=255;}
+ g.putImageData(im,0,0);
+ furTex=new T.CanvasTexture(c);furTex.wrapS=furTex.wrapT=T.RepeatWrapping;furTex.repeat.set(5,5);
+ return furTex;
+}
+const CAPS={},SMILE={};
+function capGeo(r,l){const k=r+':'+l;return CAPS[k]||(CAPS[k]=new T.CapsuleGeometry(r,l,4,10));}
+function smileGeo(sm,pk){
+ const qs=Math.round(sm*20)/20,qp=Math.round(pk*4)/4,key=qs+':'+qp;if(SMILE[key])return SMILE[key];
+ const w=(0.17+Math.max(0,qs)*0.035)*(1-qp*0.55),cy=qs*0.06;
+ const c=new T.QuadraticBezierCurve3(new T.Vector3(-w,cy,0.01),new T.Vector3(0,-0.02-qs*0.13,0.05),new T.Vector3(w,cy,0.01));
+ return SMILE[key]=new T.TubeGeometry(c,16,0.022,6,false);
+}
+function angLerp(a,b,k){let d=b-a;while(d>Math.PI)d-=2*Math.PI;while(d<-Math.PI)d+=2*Math.PI;return a+d*k;}
+const lerp=(a,b,k)=>a+(b-a)*k;
 
 function vis(p){return !p?0:(p.v!==undefined?p.v:(p.visibility===undefined?1:p.visibility));}
 function toonGrad(){
@@ -28,6 +51,9 @@ function geos(){
  GEO.cone=new T.ConeGeometry(1,1,20);
  GEO.disc=new T.CircleGeometry(1,40);
  GEO.ring=new T.RingGeometry(0.86,1,48);
+ GEO.hemi=new T.SphereGeometry(1,24,12,0,Math.PI*2,0,Math.PI/2);
+ GEO.brow=new T.CapsuleGeometry(0.045,0.2,4,8);
+ GEO.phil=new T.CapsuleGeometry(0.014,0.09,3,6);
  return GEO;
 }
 
@@ -51,7 +77,10 @@ function resize(w,h){
  cam.left=0;cam.right=w;cam.top=0;cam.bottom=-h;cam.updateProjectionMatrix();
 }
 
-function toon(col){return new T.MeshToonMaterial({color:new T.Color(col),gradientMap:toonGrad()});}
+function toon(col){
+ if(PLUSH){const c=new T.Color(col);return new T.MeshPhysicalMaterial({color:c,roughness:0.88,metalness:0,sheen:1,sheenRoughness:0.42,sheenColor:c.clone().lerp(new T.Color(1,1,1),0.5),bumpMap:fur(),bumpScale:4});}
+ return new T.MeshToonMaterial({color:new T.Color(col),gradientMap:toonGrad()});}
+function gloss(col){return new T.MeshStandardMaterial({color:new T.Color(col),roughness:0.15,metalness:0});}
 function basic(col,op){const m=new T.MeshBasicMaterial({color:new T.Color(col)});if(op!==undefined){m.transparent=true;m.opacity=op;m.depthWrite=false;}return m;}
 
 class Char{
@@ -65,6 +94,7 @@ class Char{
   this.mCol=M(col);this.mEarIn=M(C.earIn||C.fur);this.mEar=M(C.earCol||C.fur);
   this.mMuz=M(C.muzzle||'#ffffff');this.mNose=M(C.nose||'#3b2416');this.mMane=C.mane?M(C.mane):null;this.mSpike=C.spikes?M(C.spikes):null;
   this.mStripe=C.stripes?M(C.stripes):null;this.mPatch=C.patch?M(C.patch):null;this.mSpot=C.eyeSpot?M(C.eyeSpot):null;
+  this.other=[];
   this.mEye=basic('#141010');this.mWhite=basic('#ffffff');this.mCheek=basic('#ff7aa0',0.5);this.mMouth=basic('#7a2230');this.mTongue=basic('#f472b6');
   const s=(m,parent)=>{const o=new T.Mesh(GEO.s,m);(parent||this.root).add(o);return o;};
   const cy=(m)=>{const o=new T.Mesh(GEO.c,m);this.root.add(o);return o;};
@@ -83,6 +113,8 @@ class Char{
   const limb=(mUp,mLo)=>({up:cy(mUp),j0:s(mUp),j1:s(mUp),lo:cy(mLo),j2:s(mLo),end:s(mLo),pad:s(M(this.shadeHex(C.belly,0)))});
   this.legs=[limb(this.mLimb,this.mSock),limb(this.mLimb,this.mSock)];
   this.arms=[limb(this.mLimb,this.mSock),limb(this.mLimb,this.mSock)];
+  const mPad=M(this.shadeHex(C.belly,0));
+  this.hands=[0,1].map(()=>this.makeHand(this.mSock,mPad));
   // corpo
   this.body=s(this.mFur);this.belly=s(this.mBelly);
   this.stripes=[];if(this.mStripe)for(let i=0;i<4;i++)this.stripes.push(s(this.mStripe));
@@ -103,27 +135,70 @@ class Char{
   if(C.eyeSpot)hs(this.mSpot,0.38,0.08,0.68,0.28,0.31,0.14,-0.3);
   this.floppy=[];if(C.ear==='floppy'){for(const k of [-1,1]){const o=hs(this.mEar,k*0.86,-0.05,0.1,0.28,0.52,0.18,k*0.25);this.floppy.push([o,k]);}}
   hs(C.muzzle?this.mMuz:M(this.shadeHex(C.fur,0.25)),0,-0.34,0.62,0.46,0.32,0.34);
+  // olhos de verdade: branco, íris, pupila, brilho, pálpebra e sobrancelha
+  const O=m=>{this.other.push(m);return m;};
+  this.mSclera=O(gloss('#ffffff'));this.mIris=O(gloss(C.iris||'#6b3f1d'));this.mPupil=O(gloss('#0a0810'));
+  this.mLid=M(C.patch||C.fur);this.mLid.side=T.DoubleSide;this.mBrow=M(this.darkHex(C.patch||C.fur));
   this.eyes=[];
   for(const k of [-1,1]){
-   if(C.patch)hs(this.mWhite,k*0.36,0.04,0.8,0.17,0.2,0.06);
-   const e=hs(this.mEye,k*0.36,0.04,0.84,0.14,0.17,0.08);
-   const h1=hs(this.mWhite,k*0.36-0.05,0.105,0.92,0.055,0.055,0.03);
-   const h2=hs(this.mWhite,k*0.36+0.045,-0.015,0.92,0.027,0.027,0.02);
-   this.eyes.push([e,h1,h2]);
+   const eg=new T.Group();hd.add(eg);eg.position.set(k*0.35,0.06,0.73);eg.scale.setScalar(0.19);
+   s(this.mSclera,eg);
+   const look=new T.Group();eg.add(look);
+   const ir=s(this.mIris,look);ir.position.z=0.62;ir.scale.set(0.68,0.68,0.42);
+   const pu=s(this.mPupil,look);pu.position.z=0.8;pu.scale.set(0.4,0.4,0.3);
+   const h1=s(this.mWhite,look);h1.position.set(0.28,0.3,0.97);h1.scale.setScalar(0.2);
+   const h2=s(this.mWhite,look);h2.position.set(-0.22,-0.24,0.95);h2.scale.setScalar(0.1);
+   const lid=new T.Mesh(GEO.hemi,this.mLid);eg.add(lid);lid.scale.setScalar(1.07);
+   const bw=new T.Group();hd.add(bw);bw.position.set(k*0.36,0.36,0.79);
+   const bm=new T.Mesh(GEO.brow,this.mBrow);bm.rotation.z=Math.PI/2;bw.add(bm);
+   this.eyes.push({k,look,lid,bw});
   }
-  for(const k of [-1,1])hs(this.mCheek,k*0.6,-0.25,0.72,0.15,0.095,0.04);
+  this.cheeks=[-1,1].map(k=>hs(this.mCheek,k*0.6,-0.25,0.72,0.15,0.095,0.04));
   if(C.nose)hs(this.mNose,0,-0.2,0.96,0.12,0.085,0.08);else for(const k of [-1,1])hs(this.mEye,k*0.12,-0.22,0.9,0.035,0.035,0.02);
-  hs(this.mMouth,0,-0.42,0.94,0.13,0.09,0.04);hs(this.mTongue,0,-0.46,0.97,0.075,0.045,0.03);
-  if(C.tongue)hs(this.mTongue,0,-0.53,0.95,0.085,0.11,0.05);
+  // boca que abre, sorri e faz biquinho
+  this.mLine=O(basic(C.nose||'#3b2416'));this.mInner=O(basic('#5a1428'));
+  const ph=new T.Mesh(GEO.phil,this.mLine);ph.position.set(0,-0.33,0.965);hd.add(ph);
+  const mg=new T.Group();hd.add(mg);mg.position.set(0,-0.43,0.935);
+  this.mouthIn=s(this.mInner,mg);this.tongue=s(M('#ff7d9c'),mg);
+  this.line=new T.Mesh(smileGeo(0.4,0),this.mLine);mg.add(this.line);
+  this.ex={bl:[0,0],jaw:0.08,sm:0.4,brow:0,gx:0,gy:0,pk:0,pf:0,yaw:0,pit:0,wide:0};
   if(C.bow){const bw=new T.Group();hd.add(bw);bw.position.set(0.55,0.72,0.2);bw.rotation.z=-0.3;
    for(const k of [-1,1]){const o=new T.Mesh(GEO.cone,this.mCol);bw.add(o);o.scale.set(0.24,0.44,0.14);o.rotation.z=k*Math.PI/2;o.position.x=k*0.22;}
    const kn=s(this.mCol,bw);kn.scale.set(0.12,0.12,0.12);}
   this.gray=false;
  }
+ darkHex(h){const c=new T.Color(h);c.lerp(new T.Color(0.12,0.07,0.04),0.6);return '#'+c.getHexString();}
+ // mão de 5 dedos (unidades: palma ~0.5). Dedão no lado +x; espelha com scale.x negativo.
+ makeHand(mL,mP){
+  const g=new T.Group();this.root.add(g);g.visible=false;
+  const palm=new T.Mesh(GEO.s,mL);palm.position.y=0.2;palm.scale.set(0.27,0.28,0.17);g.add(palm);
+  const pad=new T.Mesh(GEO.s,mP);pad.position.set(0,0.18,0.13);pad.scale.set(0.14,0.12,0.05);g.add(pad);
+  const f=[];
+  const tk=new T.Group();tk.position.set(0.21,0.12,0.03);g.add(tk);
+  const ta=new T.Group(),tb=new T.Group();tk.add(ta);
+  const t1=new T.Mesh(capGeo(0.075,0.14),mL);t1.position.y=0.07;ta.add(t1);tb.position.y=0.17;ta.add(tb);
+  const t2=new T.Mesh(capGeo(0.068,0.12),mL);t2.position.y=0.06;tb.add(t2);
+  f.push({a:ta,b:tb,k:tk,thumb:true});
+  const X=[0.15,0.05,-0.05,-0.15],L=[0.21,0.25,0.23,0.18];
+  for(let i=0;i<4;i++){
+   const k=new T.Group();k.position.set(X[i]*1.15,0.4,0);k.rotation.z=-X[i]*1.2;g.add(k);
+   const a=new T.Group(),b=new T.Group(),l1=L[i]*0.55,l2=L[i]*0.5;k.add(a);
+   const m1=new T.Mesh(capGeo(0.064,+l1.toFixed(3)),mL);m1.position.y=l1/2;a.add(m1);b.position.y=l1+0.03;a.add(b);
+   const m2=new T.Mesh(capGeo(0.06,+l2.toFixed(3)),mL);m2.position.y=l2/2;b.add(m2);
+   f.push({a,b});
+  }
+  return {g,f,cur:[0.15,0.15,0.15,0.15,0.15],th:null};
+ }
+ setCurls(H,c){
+  H.f.forEach((f,i)=>{const v=c[i];
+   if(f.thumb){f.k.rotation.z=-(0.5-v*0.3);f.a.rotation.set(v*0.9,0,v*0.5);f.b.rotation.x=v*1.1;}
+   else{f.a.rotation.x=v*1.55;f.b.rotation.x=v*1.75;}});
+ }
  shadeHex(h,a){const c=new T.Color(h);if(a>0)c.lerp(new T.Color(1,1,1),a);return '#'+c.getHexString();}
  setGray(g){
   if(g===this.gray)return;this.gray=g;
-  for(const m of this.mats){const b=m.userData.base;if(g){const l=(b.r*0.3+b.g*0.59+b.b*0.11)*0.6;m.color.setRGB(l,l,l);}else m.color.copy(b);}
+  for(const m of this.mats){const b=m.userData.base;if(g){const l=(b.r*0.3+b.g*0.59+b.b*0.11)*0.6;m.color.setRGB(l,l,l);}else m.color.copy(b);
+   if(m.sheenColor){if(g)m.sheenColor.setRGB(0.6,0.6,0.6);else m.sheenColor.copy(b).lerp(new T.Color(1,1,1),0.5);}}
  }
  place(mesh,x,y,z,sx,sy,sz,rz){mesh.position.set(x,-y,z);mesh.scale.set(sx,sy,sz);mesh.rotation.set(0,0,rz||0);mesh.visible=true;}
  seg(mesh,a,b,r){                       // cilindro entre dois pontos (a,b em pixels de tela, com z)
@@ -189,30 +264,54 @@ class Char{
    this.seg(this.scarf.d,Z(s0,zs+2),Z(s1,zs+2),Wd*0.4);this.ball(this.scarf.e,Z(s1,zs+2),Wd*0.4);}
   // braços
   const arm=(i,s,el,wr)=>{
-   const g=this.arms[i],E=P(el),Wr=P(wr);
-   if(!E){for(const m of Object.values(g))m.visible=false;return;}
+   const g=this.arms[i],E=P(el),Wr=P(wr),H=this.hands[i];
+   if(!E){for(const m of Object.values(g))m.visible=false;H.g.visible=false;return;}
    this.seg(g.up,Z(s,zArm),Z(E,zArm),Wd*0.95);this.ball(g.j0,Z(s,zArm),Wd*0.95);this.ball(g.j1,Z(E,zArm),Wd*0.95);
-   if(Wr){this.seg(g.lo,Z(E,zArm),Z(Wr,zArm),Wd*0.9);this.ball(g.j2,Z(Wr,zArm),Wd*0.9);this.ball(g.end,Z(Wr,zArm+2),Wd*1.2);this.place(g.pad,Wr[0]+Wd*0.1,Wr[1]+Wd*0.2,zArm+Wd*1.1,Wd*0.5,Wd*0.38,Wd*0.2);}
-   else{g.lo.visible=g.j2.visible=g.end.visible=g.pad.visible=false;}
+   g.end.visible=g.pad.visible=false;
+   if(Wr){this.seg(g.lo,Z(E,zArm),Z(Wr,zArm),Wd*0.9);this.ball(g.j2,Z(Wr,zArm),Wd*0.9);
+    const hd=this.hd&&this.hd[i];let th,sx;
+    if(hd){th=hd[0]/100;sx=hd[1]>=0?1:-1;}
+    else{th=Math.atan2(-(Wr[0]-E[0]),-(Wr[1]-E[1]));sx=Math.cos(th)*(smid[0]-Wr[0])>=0?1:-1;}   // sem leitura: dedão para o lado do corpo
+    H.th=H.th===null?th:angLerp(H.th,th,0.35);
+    const tg=hd?[hd[2],hd[3],hd[4],hd[5],hd[6]].map(v=>v/100):[0.15,0.15,0.15,0.15,0.15];
+    H.cur=H.cur.map((c,j)=>c+(tg[j]-c)*0.4);
+    const sc=Wd*3.4;H.g.visible=true;H.g.position.set(Wr[0],-Wr[1],zArm+Wd*0.6);H.g.scale.set(sc*sx,sc,sc);H.g.rotation.set(0,0,H.th);
+    this.setCurls(H,H.cur);}
+   else{g.lo.visible=g.j2.visible=false;H.g.visible=false;}
   };
   arm(0,ls,13,15);arm(1,rs,14,16);
   // cabeça
   const nose=P(0);
   const hc=nose?[nose[0]+ux*R*0.12,nose[1]+uy*R*0.12]:[smid[0]+ux*R,smid[1]+uy*R];
   let tilt=Math.atan2(rs[1]-ls[1],rs[0]-ls[0]);if(Math.abs(tilt)>Math.PI/2)tilt-=Math.PI*Math.sign(tilt);
-  this.head.position.set(hc[0],-hc[1],zHead);this.head.scale.set(R,R,R);this.head.rotation.set(0,0,-tilt*0.8);
+  // expressão: vem da câmera (rosto da criança) ou, sem leitura, pisca sozinho e sorri
+  const f=this.fd,ex=this.ex;let tg;
+  if(f){const a=SWAP_LR?1:0;tg={bl:[f[a]/100,f[1-a]/100],jaw:f[2]/100,sm:f[3]/100,brow:f[4]/100,gx:f[5]/100,gy:f[6]/100,pk:f[7]/100,pf:f[8]/100,yaw:f[9]/100,pit:f[10]/100,wide:f[11]/100};}
+  else{const b=((t+seed*1.3)%3.7)<0.13?1:0;tg={bl:[b,b],jaw:0.08,sm:0.4,brow:0,gx:0,gy:0,pk:0,pf:0,yaw:0,pit:0,wide:0};}
+  ex.bl=ex.bl.map((v,i)=>lerp(v,tg.bl[i],0.7));
+  for(const key of ['jaw','sm','brow','gx','gy','pk','pf','yaw','pit','wide'])ex[key]=lerp(ex[key],tg[key],0.35);
+  this.head.position.set(hc[0],-hc[1],zHead);this.head.scale.set(R,R,R);this.head.rotation.set(ex.pit*0.35,ex.yaw*0.6,-tilt*0.8);
+  const happy=Math.max(0,ex.sm-0.8)*0.6,open=-0.95-ex.wide*0.3-Math.max(0,ex.brow)*0.15;
+  this.eyes.forEach((e,i)=>{
+   e.look.rotation.set(-ex.gy*0.4,-ex.gx*0.5,0);
+   e.lid.rotation.x=lerp(open,1.62,Math.min(1,Math.max(ex.bl[i],happy)));
+   e.bw.position.y=0.36+ex.brow*0.08;e.bw.rotation.z=-e.k*ex.brow*0.38;
+  });
+  const cs=1+Math.max(0,ex.sm)*0.3+ex.pf*0.6;this.cheeks.forEach(c=>{c.scale.set(0.15*cs,0.095*cs,0.04);});
+  const msx=(1+Math.max(0,ex.sm)*0.25-ex.jaw*0.1)*(1-ex.pk*0.55),msy=0.05+ex.jaw*0.95+ex.pk*0.4;
+  this.mouthIn.scale.set(0.16*msx,0.16*msy,0.04);this.mouthIn.position.y=-0.16*msy*0.85;
+  this.tongue.visible=ex.jaw>0.2;this.tongue.scale.set(0.1*msx,0.05,0.03);this.tongue.position.set(0,-0.16*msy*1.45,0.02);
+  this.line.geometry=smileGeo(ex.sm,ex.pk);
   const es=Math.sin(t*2.2+seed)*0.12;
   if(this.longEars)for(const [o,i2,k] of this.longEars){o.position.set(k*(0.4+es*0.5),1.3,-0.05);o.rotation.z=-k*(0.12+es);i2.position.set(k*(0.4+es*0.5),1.28,0.1);i2.rotation.z=-k*(0.12+es);}
   for(const [o,k] of this.floppy)o.rotation.z=k*(0.25+es);
-  const blink=((t+seed*1.3)%3.7)<0.13;
-  for(const [e,h1,h2] of this.eyes){e.scale.y=blink?0.02:0.17;h1.visible=h2.visible=!blink;}
   const top=C.ear==='long'?R*2.2:C.ear==='pointy'?R*1.65:C.mane?R*1.45:R*1.25;
   return {hx:hc[0],hy:hc[1],top,R};
  }
  dispose(){
   scene.remove(this.root);
   for(const m of this.mats)m.dispose();
-  [this.mEye,this.mWhite,this.mCheek,this.mMouth,this.mTongue,this.shadow.material,this.ring.material].forEach(m=>m.dispose());
+  [this.mEye,this.mWhite,this.mCheek,this.mMouth,this.mTongue,this.shadow.material,this.ring.material].concat(this.other).forEach(m=>m.dispose());
  }
 }
 
@@ -224,6 +323,7 @@ function frame(list,map,t){
   let ch=chars[p.c];
   if(!ch||ch.id!==p.id||ch.col!==p.col){if(ch)ch.dispose();ch=chars[p.c]=new Char(p.id,p.col);}
   if(!p.k||p.hidden){ch.root.visible=false;continue;}
+  ch.fd=p.f||null;ch.hd=p.h||null;
   ch.setGray(!!p.gray);
   const r=ch.update(p.k,map,t/1000,p.c);
   if(r){r.c=p.c;out.push(r);}
