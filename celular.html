@@ -107,7 +107,7 @@ let persons=[],feedSeq=0,trackedSeq=-1,feedAr=4/3,lastCamT=-1;
 const CH=1000;let FW=CH*4/3,FH=CH;                          // campo virtual do jogo
 let selGame='danca',game=null,state='lobby',slots=[];
 let coreo=null,coreoKey='',prepping=false,prepPct=0,telVideoReady=false;
-let sndQ=[],lastScene=0,lastLobby=0,lastT=performance.now(),prevTick=0;
+let sndQ=[],lastScene=0,lastLobby=0,lastT=performance.now(),prevTick=0,poseWant=0,poseWantSince=0;
 
 // ================= utilidades =================
 const q=v=>Math.round(v*1000)/1000;
@@ -591,7 +591,7 @@ function endGame(){
 }
 function toLobby(){
  if(game&&game.stop&&(state==='play'||state==='count'))game.stop();
- state='lobby';send({type:'menu'});lastLobby=0;setPoses(3);
+ state='lobby';send({type:'menu'});lastLobby=0;
  $('st2').innerHTML='<b>Menu.</b> Escolha o jogo aqui ou no telão.';
 }
 function sendLobby(){
@@ -700,7 +700,13 @@ function loop(){
  if(playing&&game&&now-lastScene>=40)sendScene();             // mantém balões/bolas atualizados entre imagens da câmera
  if(!playing&&now-lastLobby>200){
   lastLobby=now;
-  if(state==='lobby')sendLobby();
+  if(state==='lobby'){
+   sendLobby();
+   // no menu, procura só quem está na frente da câmera + 1 (procurar 3 sempre deixa a análise lenta)
+   const want=Math.min(3,visiblePeople().length+1);
+   if(want!==curPoses){if(!poseWantSince||poseWant!==want){poseWant=want;poseWantSince=now;}else if(now-poseWantSince>2000){setPoses(want);poseWantSince=0;}}
+   else poseWantSince=0;
+  }
   const vp=visiblePeople();
   $('people').innerHTML=vp.length?vp.slice(0,3).map((o,i)=>'<span class="chip" style="background:'+COLORS[i]+'">Jogador '+(i+1)+'</span>').join(''):'<span class="st">Não estou vendo ninguém.</span>';
   if(state==='res'){$('go').disabled=false;$('why').textContent='';}
