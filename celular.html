@@ -50,6 +50,7 @@ canvas{width:100%;border-radius:12px;background:#000}
   <option value="environment">Traseira (imagem melhor)</option>
  </select>
  <button id="con">Conectar</button>
+ <a id="getapp" href="app.html" hidden style="color:var(--cyan);font-weight:700;text-align:center">Baixe o app AppDance para Android: fica bem mais rápido</a>
  <div class="st" id="st">Abra o telão no projetor ou no PC para ver o código.</div>
  <div id="err"></div>
 </div>
@@ -216,7 +217,31 @@ function sendScene(){
  sendFast(Object.assign({type:'scene',s:++seq,g:game.id,ar:q(feedAr),ch:chars,ts:Math.round(frameTs),lt:Math.round(pipeLat)},game.scene()));
  if(snd.length)send({type:'snd',l:snd});                       // sons vão pelo canal confiável (não podem se perder)
 }
+// ---- modo APP: câmera e detector nativos do Android mandam os esqueletos para cá ----
+const NATIVE=!!(window.AppDanceNativo&&window.AppDanceNativo.available&&window.AppDanceNativo.available());
+let nativeReady=null;
+function nativeStart(facing){
+ return new Promise((res,rej)=>{
+  const to=setTimeout(()=>rej(new Error('a câmera do app não respondeu. Feche e abra o app de novo.')),12000);
+  nativeReady=()=>{clearTimeout(to);nativeReady=null;res();};
+  window.onNativeStatus=s=>{if(!s.ok){clearTimeout(to);rej(new Error(s.msg));}else gpuOn=s.delegate==='GPU';};
+  AppDanceNativo.start(facing||'user');
+ });
+}
+window.onNativePose=d=>{
+ const t1=performance.now();
+ if(d.ar&&Math.abs(d.ar-feedAr)>0.01){feedAr=d.ar;FW=CH*feedAr;if($('s2').hidden===false){cv.width=Math.round(360*feedAr);cv.height=360;}}
+ persons=(d.p||[]).map(pose=>pose.map(a=>({x:a[0],y:a[1],visibility:a[2]})));feedSeq++;
+ detMs=detMs*0.8+(d.ms||0)*0.2;gpuOn=d.d==='GPU';
+ const lat=d.lat>0?d.lat:40;frameTs=t1-lat;pipeLat=pipeLat*0.8+lat*0.2;
+ if(nativeReady)nativeReady();
+ if((state==='play'||state==='count')&&game){
+  if(track()&&game.onFeed)game.onFeed();
+  sendScene();
+ }
+};
 function setPoses(n){
+ if(NATIVE){if(n!==curPoses){curPoses=n;try{AppDanceNativo.setPoses(n);}catch(_){}}return;}
  if(!lm||n===curPoses)return;curPoses=n;
  try{const p=lm.setOptions({numPoses:n});if(p&&p.catch)p.catch(()=>{});}catch(_){}
 }
@@ -567,12 +592,14 @@ function toLobby(){
 }
 function sendLobby(){
  const vp=visiblePeople().slice(0,3),w=whyNot();
- sendFast({type:'lobby',s:++seq,sel:selGame,why:w,dance:{t:$('pstat').textContent,p:prepPct},ar:q(feedAr),ch:chars,ps:vp.map(o=>pack(o.k)),dg:{det:Math.round(detMs),lt:Math.round(pipeLat),gpu:gpuOn}});
+ sendFast({type:'lobby',s:++seq,sel:selGame,why:w,dance:{t:$('pstat').textContent,p:prepPct},ar:q(feedAr),ch:chars,ps:vp.map(o=>pack(o.k)),dg:{det:Math.round(detMs),lt:Math.round(pipeLat),gpu:gpuOn,app:NATIVE}});
  $('why').textContent=w;$('go').disabled=!!w;
 }
 
 // ================= conexão com o telão =================
 $('code').value=(location.hash||'').replace('#','').slice(0,4);
+if(!NATIVE&&/Android/i.test(navigator.userAgent))$('getapp').hidden=false;
+if(NATIVE)document.querySelector('h1').insertAdjacentHTML('beforeend',' <small style="font-size:13px;color:var(--ok)">app</small>');
 function st(t){$('st').textContent=t;}
 $('con').onclick=async()=>{
  $('err').textContent='';
@@ -580,20 +607,26 @@ $('con').onclick=async()=>{
  if(!/^\d{4}$/.test(code)){$('err').textContent='Digite o código de 4 números que aparece no telão.';return;}
  $('con').disabled=true;
  try{
-  st('Ligando a câmera...');
-  const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:$('camsel').value,width:{ideal:320},height:{ideal:240},frameRate:{ideal:30}},audio:false});
-  cam.srcObject=stream;await cam.play();
-  feedAr=cam.videoWidth/cam.videoHeight;FW=CH*feedAr;
-  st('Testando o processador do celular (só na primeira vez)...');
-  if(!lm)lm=await pickFastest();
+  if(NATIVE){
+   st('Ligando a câmera do app...');
+   await nativeStart($('camsel').value);
+  }else{
+   st('Ligando a câmera...');
+   const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:$('camsel').value,width:{ideal:320},height:{ideal:240},frameRate:{ideal:30}},audio:false});
+   cam.srcObject=stream;await cam.play();
+   feedAr=cam.videoWidth/cam.videoHeight;FW=CH*feedAr;
+   st('Testando o processador do celular (só na primeira vez)...');
+   if(!lm)lm=await pickFastest();
+  }
   st('Conectando ao telão...');
   await connect(code);
-  cv.width=cam.videoWidth;cv.height=cam.videoHeight;
+  if(NATIVE){cv.width=Math.round(360*feedAr);cv.height=360;}
+  else{cv.width=cam.videoWidth;cv.height=cam.videoHeight;}
   $('s1').hidden=true;$('s2').hidden=false;
   $('st2').innerHTML='<b>Conectado ao telão!</b> Escolha o jogo aqui ou no telão.';
   buildMenu();selectGame('danca');renderChars();
   keepAwake();
-  useRVFC='requestVideoFrameCallback' in HTMLVideoElement.prototype;
+  useRVFC=!NATIVE&&'requestVideoFrameCallback' in HTMLVideoElement.prototype;
   if(useRVFC)cam.requestVideoFrameCallback(onVideoFrame);
   requestAnimationFrame(loop);
  }catch(e){
@@ -643,8 +676,11 @@ function loop(){
  const playingNow=state==='play'||state==='count';
  // durante o jogo a prévia no celular atualiza menos, para sobrar processador
  const drawPrev=!playingNow||(++prevTick%4===0);
- if(drawPrev){cx.save();cx.scale(-1,1);cx.drawImage(cam,-W,0,W,H);cx.restore();}
- if(!useRVFC&&cam.currentTime!==lastCamT){lastCamT=cam.currentTime;detectNow(null);}   // aparelhos sem o recurso novo
+ if(drawPrev){
+  if(NATIVE){cx.fillStyle='#0b0a12';cx.fillRect(0,0,W,H);}         // no app a câmera é nativa: aqui mostramos só os esqueletos
+  else{cx.save();cx.scale(-1,1);cx.drawImage(cam,-W,0,W,H);cx.restore();}
+ }
+ if(!NATIVE&&!useRVFC&&cam.currentTime!==lastCamT){lastCamT=cam.currentTime;detectNow(null);}   // aparelhos sem o recurso novo
  const playing=state==='play'||state==='count';
  if(playing&&game){
   if(track()&&game.onFeed)game.onFeed();

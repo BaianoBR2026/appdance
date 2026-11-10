@@ -1,0 +1,68 @@
+name: APK Android
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Baixar o modelo de pose
+        run: |
+          mkdir -p android/app/src/main/assets
+          curl -fsSL -o android/app/src/main/assets/pose_landmarker_lite.task \
+            https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task
+
+      - name: Compilar o APK
+        working-directory: android
+        run: |
+          set -o pipefail
+          gradle assembleRelease --no-daemon --stacktrace 2>&1 | tee ../build.log
+
+      - name: Publicar o APK no site (appdance.netlify.app/app/appdance.apk)
+        if: success()
+        run: |
+          mkdir -p app
+          cp android/app/build/outputs/apk/release/app-release.apk app/appdance.apk
+          echo "{\"versao\":\"1.0.${GITHUB_RUN_NUMBER}\",\"build\":${GITHUB_RUN_NUMBER},\"data\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"tamanho\":$(stat -c%s app/appdance.apk)}" > app/versao.json
+          git config user.name "AppDance Build"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/appdance.apk app/versao.json
+          git commit -m "APK automático 1.0.${GITHUB_RUN_NUMBER}"
+          for i in 1 2 3; do git pull --rebase origin main && git push origin HEAD:main && break; sleep 5; done
+
+      - name: Guardar o log do erro (branch build-log)
+        if: failure()
+        run: |
+          tail -c 300000 build.log > /tmp/log.txt || echo "sem log" > /tmp/log.txt
+          git config user.name "AppDance Build"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan build-log
+          git rm -rf --cached . > /dev/null
+          cp /tmp/log.txt log.txt
+          git add log.txt
+          git commit -m "Log do build ${GITHUB_RUN_NUMBER} (falhou)"
+          git push -f origin build-log

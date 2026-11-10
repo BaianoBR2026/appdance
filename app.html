@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AppDance para Android</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@800&family=Nunito:wght@500;700&display=swap">
+<style>
+:root{--bg:#141a33;--panel:#1e2547;--fg:#f6f3ff;--mut:#a9b0d6;--pink:#ff2d7a;--cyan:#22d3ee;--yel:#facc15;--ok:#4ade80}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:"Nunito",system-ui,sans-serif;font-size:17px}
+main{max-width:620px;margin:0 auto;padding:24px 16px 40px;display:flex;flex-direction:column;gap:16px}
+h1{font-family:"Baloo 2",system-ui,sans-serif;font-size:36px;line-height:1.05;margin:0}
+h1 span{color:var(--pink)}
+.card{background:var(--panel);border-radius:18px;padding:18px;display:flex;flex-direction:column;gap:10px}
+.dl{display:block;text-align:center;font-family:"Baloo 2",system-ui,sans-serif;font-size:24px;background:var(--pink);color:#fff;text-decoration:none;border-radius:999px;padding:16px}
+.dl:focus-visible{outline:3px solid var(--cyan);outline-offset:3px}
+#ver{color:var(--mut);text-align:center;font-size:15px}
+ol{margin:0;padding-left:22px;display:flex;flex-direction:column;gap:8px;line-height:1.45}
+b{color:var(--yel)}
+.mut{color:var(--mut);font-size:15px;line-height:1.45}
+a.back{color:var(--cyan)}
+</style></head><body>
+<main>
+ <h1>App<span>Dance</span> para Android</h1>
+ <p class="mut" style="margin:0">O app usa a câmera e o detector de corpo do próprio Android, que são bem mais rápidos que pelo navegador. O telão continua igual: abra <b>appdance.netlify.app</b> na TV e escolha Telão.</p>
+
+ <div class="card">
+  <a class="dl" id="dl" href="app/appdance.apk">Baixar o app (APK)</a>
+  <div id="ver">Procurando a versão mais nova...</div>
+ </div>
+
+ <div class="card">
+  <strong>Como instalar</strong>
+  <ol>
+   <li>Toque em <b>Baixar o app</b> e espere terminar.</li>
+   <li>Abra o arquivo <b>AppDance.apk</b> (na notificação ou em Downloads).</li>
+   <li>Se o Android avisar sobre "fontes desconhecidas", toque em <b>Configurações</b> e ative <b>Permitir desta fonte</b>. Depois volte e toque em <b>Instalar</b>.</li>
+   <li>Abra o <b>AppDance</b>, permita a câmera e digite o código que aparece no telão.</li>
+  </ol>
+  <p class="mut" style="margin:0">Para atualizar, é só baixar de novo e instalar por cima. Seus ajustes continuam.</p>
+ </div>
+ <a class="back" href="index.html">Voltar ao AppDance</a>
+</main>
+<script>
+fetch('app/versao.json',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(v=>{
+ const el=document.getElementById('ver');
+ if(!v){el.textContent='O app ainda está sendo preparado. Volte em alguns minutos.';return;}
+ const d=new Date(v.data);
+ el.textContent='Versão '+v.versao+' · '+(v.tamanho/1048576).toFixed(1)+' MB · '+d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+}).catch(()=>{document.getElementById('ver').textContent='O app ainda está sendo preparado. Volte em alguns minutos.';});
+</script>
+</body></html>

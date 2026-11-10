@@ -543,7 +543,7 @@ function showLobby(m){
  if(m.dg){
   pipeLat=m.dg.lt||pipeLat;
   const slow=m.dg.det>60;
-  $('diag').innerHTML='Conexão '+(connKind||'...')+' · rede '+Math.round(rtt/2)+' ms · câmera '+(m.dg.lt||'?')+' ms ('+(m.dg.gpu?'GPU':'CPU')+', '+m.dg.det+' ms por imagem)'+
+  $('diag').innerHTML='Conexão '+(connKind||'...')+' · rede '+Math.round(rtt/2)+' ms · câmera '+(m.dg.lt||'?')+' ms ('+(m.dg.gpu?'GPU':'CPU')+', '+m.dg.det+' ms por imagem'+(m.dg.app?', app':', navegador')+')'+
    (connKind&&connKind!=='direta pelo Wi-Fi'?'<br><b style="color:var(--yel)">Dica: coloque o celular no mesmo Wi-Fi do telão e desligue os dados móveis.</b>':'')+
    (slow?'<br><b style="color:var(--yel)">No menu o celular procura até 3 pessoas e fica mais lento; no jogo ele procura só os jogadores. Feche outros apps.</b>':'');
  }
