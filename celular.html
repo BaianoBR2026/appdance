@@ -290,7 +290,8 @@ function handParams(hd){
  // direção da mão e lado do dedão, já no espaço espelhado do telão (y para cima)
  const P=i=>[(1-I[i*2])*feedAr,-I[i*2+1]];
  const a=P(0),bb=P(9),t=P(5),D=[bb[0]-a[0],bb[1]-a[1]],T=[t[0]-a[0],t[1]-a[1]];
- return{th:Math.atan2(-D[0],D[1]),sx:(T[0]*D[1]-T[1]*D[0])>=0?1:-1,c:curls,w:[I[0],I[1]]};
+ const pn=Math.hypot(...sub(v3(m,4),v3(m,8)))/palm;           // pinça: ponta do dedão encostando no indicador
+ return{th:Math.atan2(-D[0],D[1]),sx:(T[0]*D[1]-T[1]*D[0])>=0?1:-1,c:curls,w:[I[0],I[1]],pn,cl:(curls[1]+curls[2]+curls[3]+curls[4])/4};
 }
 function angLerp(a,b,k){let d=b-a;while(d>Math.PI)d-=2*Math.PI;while(d<-Math.PI)d+=2*Math.PI;return a+d*k;}
 window.onNativeFace=d=>{
@@ -317,10 +318,14 @@ window.onNativeHands=d=>{
   const key=si*2+side;if(usedH.has(hj)||usedA.has(key))continue;usedH.add(hj);usedA.add(key);
   const s=slots[si],h=hs[hj];s.hv=s.hv||[null,null];s.hAt=s.hAt||[0,0];
   const o=s.hv[side];
-  s.hv[side]=o&&now-s.hAt[side]<500?{th:angLerp(o.th,h.th,0.6),sx:h.sx,c:o.c.map((c,i)=>c+(h.c[i]-c)*0.7)}:{th:h.th,sx:h.sx,c:h.c};
+  s.hv[side]=o&&now-s.hAt[side]<500?{th:angLerp(o.th,h.th,0.6),sx:h.sx,c:o.c.map((c,i)=>c+(h.c[i]-c)*0.7),pn:o.pn+(h.pn-o.pn)*0.7,cl:o.cl+(h.cl-o.cl)*0.7}:{th:h.th,sx:h.sx,c:h.c,pn:h.pn,cl:h.cl};
   s.hAt[side]=now;
  }
 };
+function handPt(s,side){const k=s.k;if(!k)return null;const a=k[side?20:19],w=k[side?16:15];const p=vis(a)>0.4?a:(vis(w)>0.4?w:null);return p?scr(p):null;}
+function handFresh(s,side){return s.hv&&s.hv[side]&&performance.now()-s.hAt[side]<450?s.hv[side]:null;}
+function handGrip(s,side){const v=handFresh(s,side);if(!v)return null;return v.pn<0.45||v.cl>0.55;}   // null = sem leitura dos dedos
+function fingersUp(s){let n=0,any=false;for(const side of [0,1]){const v=handFresh(s,side);if(!v)continue;any=true;v.c.forEach((c,i)=>{if(c<(i?0.35:0.4))n++;});}return any?n:-1;}
 function extrasFor(s){
  const now=performance.now(),o={};
  if(s.fv&&now-s.fAt<450)o.f=s.fv.map(v=>Math.round(v*100));
@@ -575,8 +580,109 @@ const Espelho={
    big:p?{t:p[0],c:p[1],y:0.92,s:0.08}:null,ex:EXTRAS?1:0};},
  results(){return slots.map((s,i)=>({i,score:0,txt:'Brincou de espelho!'}));}
 };
-const GAMES={danca:Danca,baloes:Baloes,corrida:Corrida,estatua:Estatua,desvia:Desvia,espelho:Espelho};
-const ORDER=['danca','espelho','baloes','corrida','estatua','desvia'];
+const PALAVRAS=[['SOL','LUA','MAR','BOI','UVA','PAI','REI','MEL'],['BOLA','CASA','GATO','PATO','SAPO','BOLO','PIPA','VACA','LOBO','FOCA','DADO','MALA'],['PEIXE','LIVRO','PRATO','MILHO','FESTA','COBRA','ZEBRA']];
+const Palavra={
+ id:'palavra',nome:'Monta Palavra',curta:'Pegue as letras no ar',
+ desc:'O telão fala uma palavra. Cada criança pega as letras que flutuam na sua parte da tela (fechando a mão ou fazendo pinça) e leva até os quadradinhos lá em cima. 6 palavras.',
+ RODADAS:6,
+ start(n){this.n=n;this.round=0;this.stars=Array(n).fill(0);this.word='';this.newRound();},
+ newRound(){
+  this.round++;const L=PALAVRAS[this.round<=2?0:this.round<=5?1:2];
+  let w;do{w=L[Math.floor(Math.random()*L.length)];}while(w===this.word&&L.length>1);this.word=w;
+  this.phase='fala';this.pt=2.2;this.order=[];this.zones=[];this.letters=[];
+  const zw=FW/this.n,size=Math.min(FH*0.1,zw*0.86/w.length),AB='ABCDEFGHIJLMNOPRSTUVZ';
+  for(let i=0;i<this.n;i++){
+   const x0=i*zw,sl=[];
+   for(let j=0;j<w.length;j++)sl.push({ch:w[j],x:x0+zw/2+(j-(w.length-1)/2)*size*1.1,y:FH*0.115,f:false});
+   this.zones.push({sl,done:false,size,bad:0});
+   const extra=[];while(extra.length<2){const c=AB[Math.floor(Math.random()*AB.length)];if(!w.includes(c)&&!extra.includes(c))extra.push(c);}
+   const cs=(w+extra.join('')).split('').sort(()=>Math.random()-0.5);
+   const cols=Math.min(cs.length,Math.max(2,Math.floor(zw/(FH*0.14)))),rows=Math.ceil(cs.length/cols);
+   const r=Math.min(FH*0.06,zw/cols*0.38);
+   cs.forEach((c,j)=>{const col=j%cols,row=Math.floor(j/cols),hx=x0+zw*(col+0.5)/cols+(row%2?zw/cols*0.25:0),hy=FH*(rows>1?0.4+row*0.2/(rows-1):0.5);
+    this.letters.push({ch:c,z:i,hx,hy,x:hx,y:hy,r,st:0,ph:Math.random()*6,drop:0});});
+  }
+  this.hold=Array.from({length:this.n},()=>[-1,-1]);
+  send({type:'say',t:'Monte a palavra: '+w.toLowerCase()});
+ },
+ update(dt){
+  this.pt-=dt;const t=performance.now()/1000;
+  for(const L of this.letters)if(L.st===0){const k=Math.min(1,dt*3);L.x+=(L.hx+Math.sin(t*0.9+L.ph)*L.r*0.35-L.x)*k;L.y+=(L.hy+Math.cos(t*1.1+L.ph)*L.r*0.3-L.y)*k;}
+  if(this.phase==='fala'){if(this.pt<=0){this.phase='joga';this.pt=45;}return;}
+  if(this.phase==='fim'){if(this.pt<=0){if(this.round>=this.RODADAS)endGame();else this.newRound();}return;}
+  slots.forEach((s,i)=>{
+   const Z=this.zones[i];if(!Z||Z.done)return;
+   for(const side of [0,1]){
+    const p=handPt(s,side),g=handGrip(s,side),hi=this.hold[i][side];
+    if(hi>=0){
+     const L=this.letters[hi];
+     if(!p){L.st=0;this.hold[i][side]=-1;continue;}
+     L.x=p[0];L.y=p[1];
+     if(g===false){L.drop+=dt;if(L.drop>0.3){L.st=0;this.hold[i][side]=-1;continue;}}else L.drop=0;   // abriu a mão: solta
+     for(const q of Z.sl){
+      if(q.f||Math.hypot(q.x-L.x,q.y-L.y)>Z.size*0.75)continue;
+      if(q.ch===L.ch){
+       q.f=true;L.st=2;L.x=q.x;L.y=q.y;this.hold[i][side]=-1;sndQ.push('ok');send({type:'say',t:L.ch.toLowerCase()});
+       if(Z.sl.every(o=>o.f)){Z.done=true;this.order.push(i);this.stars[i]+=1+(this.n>1&&this.order.length===1?1:0);sndQ.push('win');send({type:'say',t:'Muito bem! '+this.word.toLowerCase()+'!'});}
+      }else if(t-Z.bad>1.2){Z.bad=t;sndQ.push('bad');}
+      break;
+     }
+    }else if(p&&g!==false){                                     // mão encostou numa letra (fechada, pinça, ou sem leitura dos dedos)
+     let best=-1,bd=1e9;
+     this.letters.forEach((L,j)=>{if(L.st!==0||L.z!==i)return;const d=Math.hypot(L.x-p[0],L.y-p[1]);if(d<L.r*1.35&&d<bd){bd=d;best=j;}});
+     if(best>=0){this.letters[best].st=1;this.letters[best].drop=0;this.hold[i][side]=best;sndQ.push('pop');}
+    }
+   }
+  });
+  const allDone=this.zones.every((Z,i)=>Z.done||!slots[i].k)&&this.order.length>0;
+  if(allDone||this.pt<=0){this.phase='fim';this.pt=2.8;if(!this.order.length)send({type:'say',t:'Acabou o tempo! Era '+this.word.toLowerCase()});}
+ },
+ scene(){
+  return{pl:plScene(),
+   lx:this.letters.map(L=>[q(L.x/FW),q(L.y/FH),q(L.r/FH),L.ch,L.st,L.z]),
+   sl:this.zones.flatMap((Z,i)=>Z.sl.map(o=>[q(o.x/FW),q(o.y/FH),q(Z.size/FH),o.ch,o.f?1:0,i])),
+   zn:this.n,dn:this.zones.map(Z=>Z.done?1:0),
+   hud:{ch:slots.map((s,i)=>({c:COLORS[i],t:'J'+(i+1),s:'★'.repeat(this.stars[i])||' ',sc:'#facc15'})),r:this.phase==='joga'?fmt(this.pt):'Palavra '+this.round+' de '+this.RODADAS},
+   big:this.phase==='fala'?{t:this.word,c:'#facc15',y:0.55,s:0.18}:this.phase==='fim'?{t:this.order.length?'Muito bem!':'Era '+this.word,c:this.order.length?'#4ade80':'#facc15',y:0.55,s:0.13}:null};
+ },
+ results(){return slots.map((s,i)=>({i,score:this.stars[i],txt:this.stars[i]+(this.stars[i]===1?' estrela':' estrelas')})).sort((a,b)=>b.score-a.score);}
+};
+const Dedos={
+ id:'dedos',nome:'Conta nos Dedinhos',curta:'Mostre os números com os dedos',
+ desc:'O telão pede um número ou uma continha e cada criança mostra a resposta com os dedos, segurando por 1 segundo. 10 desafios. Precisa do app no celular.',
+ RODADAS:10,
+ start(n){this.n=n;this.round=0;this.stars=Array(n).fill(0);this.ans=0;this.next();},
+ next(){
+  this.round++;const r=this.round;let txt,fala,ans;
+  do{
+   if(r<=4){ans=1+Math.floor(Math.random()*5);txt='Mostre '+ans+(ans>1?' dedos!':' dedo!');fala=txt;}
+   else if(r<=7){ans=6+Math.floor(Math.random()*5);txt='Mostre '+ans+' dedos!';fala=txt+' Use as duas mãos.';}
+   else{const a=1+Math.floor(Math.random()*5),b=1+Math.floor(Math.random()*Math.min(5,10-a));ans=a+b;txt=a+' + '+b+' = ?';fala='Quanto é '+a+' mais '+b+'?';}
+  }while(ans===this.ans);
+  Object.assign(this,{ans,txt,phase:'pede',pt:12,first:-1,hold:Array(this.n).fill(0),ok:Array(this.n).fill(0),cnt:Array(this.n).fill(-1)});
+  send({type:'say',t:fala});
+ },
+ update(dt){
+  this.pt-=dt;
+  if(this.phase==='mostra'){if(this.pt<=0){if(this.round>=this.RODADAS)endGame();else this.next();}return;}
+  slots.forEach((s,i)=>{
+   const c=s.k?fingersUp(s):-1;this.cnt[i]=c;if(this.ok[i])return;
+   if(c===this.ans){this.hold[i]+=dt;if(this.hold[i]>=1){this.ok[i]=1;this.stars[i]++;if(this.first<0){this.first=i;if(this.n>1)this.stars[i]++;}sndQ.push('ok');}}
+   else this.hold[i]=Math.max(0,this.hold[i]-dt*2);
+  });
+  const any=this.ok.some(Boolean),all=this.ok.every((o,i)=>o||!slots[i].k);
+  if(this.pt<=0||(any&&all)){this.phase='mostra';this.pt=2.6;send({type:'say',t:any?'Isso! '+this.ans+'!':'Era '+this.ans+'.'});sndQ.push(any?'win':'bad');}
+ },
+ scene(){
+  const m=this.phase==='mostra';
+  return{pl:plScene(i=>({fc:this.cnt[i],pr:q(Math.min(1,this.hold[i])),ok:this.ok[i]})),
+   hud:{ch:slots.map((s,i)=>({c:COLORS[i],t:'J'+(i+1),s:'★'.repeat(this.stars[i])||' ',sc:'#facc15'})),r:m?'Desafio '+this.round+' de '+this.RODADAS:fmt(this.pt)},
+   big:{t:m?'Resposta: '+this.ans:this.txt,c:m?'#4ade80':'#facc15',y:0.9,s:0.1},ex:EXTRAS?1:0};
+ },
+ results(){return slots.map((s,i)=>({i,score:this.stars[i],txt:this.stars[i]+(this.stars[i]===1?' estrela':' estrelas')})).sort((a,b)=>b.score-a.score);}
+};
+const GAMES={danca:Danca,baloes:Baloes,corrida:Corrida,estatua:Estatua,desvia:Desvia,espelho:Espelho,palavra:Palavra,dedos:Dedos};
+const ORDER=['danca','palavra','dedos','espelho','baloes','corrida','estatua','desvia'];
 
 // ================= vídeo da dança (preparado aqui no celular) =================
 function setPrep(p,txt){prepPct=p;$('pfill').style.width=p+'%';$('pstat').textContent=txt;}
@@ -643,6 +749,7 @@ function selectGame(id){
 }
 function whyNot(){
  if(!visiblePeople().length)return 'Não estou vendo ninguém. Afastem-se até aparecer de corpo inteiro.';
+ if(selGame==='dedos'&&!EXTRAS)return 'Conta nos Dedinhos precisa do app AppDance (versão nova) no celular para ler os dedos.';
  if(selGame==='danca'){
   if(prepping)return 'Preparando o vídeo da dança...';
   if(!coreo)return 'Escolha o vídeo da dança.';
